@@ -368,7 +368,7 @@ static class WeaponObject {
     static struct WeaponParameters {
         float bullet_speed_;
         float inheritence_;
-        float ping_; // in ms
+        float ping_;  // in ms
         float self_compensation_ping_ = 0;
         bool use_inheritance = true;
         bool use_acceleration = false;
@@ -427,7 +427,7 @@ bool WeaponObject::PredictAimAtTarget(WorldObject* target_object, Vector* output
 
     /*
     if (weapon_type_ == WeaponType::kProjectileArching) {
-        return PredictAimAtTarget_DicksuckingLord(target_object, output_vector, offset);
+                    return PredictAimAtTarget_DicksuckingLord(target_object, output_vector, offset);
     }
     */
 
@@ -873,7 +873,7 @@ void Tick(void) {
     FVector muzzle_offset;
 
     if (use_muzzle_location) {
-        //muzzle_offset = game_data::my_player.character_->Weapon->FireOffset;
+        // muzzle_offset = game_data::my_player.character_->Weapon->FireOffset;
         muzzle_offset = game_data::my_player.character_->eventGetWeaponStartTraceLocation(game_data::my_player.character_->Weapon) - game_data::my_player.location_;
     }
 
@@ -885,11 +885,28 @@ void Tick(void) {
             bool result = abstraction::my_weapon_object.PredictAimAtTarget(&player_world_object, &prediction, muzzle_offset);
 
             if (result) {
+                static const bool use_trace = true;
+                if (use_trace) {
+                    static FVector hit_location;
+                    static FVector hit_normal;
+                    static FTraceHitInfo hit_info;
+                    AActor* hitActor = game_data::local_player_controller->Trace(prediction, target_player.location_, false, FVector(), 0, &hit_location, &hit_normal, &hit_info);
+
+                    if (hitActor) {
+                        prediction = hit_location;
+                        if (target_player.location_.Z < hit_location.Z) {
+                            prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight / 2;
+                        } else {
+                            prediction.Z += target_player.character_->CylinderComponent->CollisionHeight / 2;
+                        }
+                    }
+                }
+
                 FVector2D projection = game_functions::Project(prediction);
                 projections_of_predictions.push_back(projection);
 
                 if (aimbot_settings.auto_aim) {
-                    prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight/2;
+                    prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight / 2;
                     FRotator aim_rotator = math::VectorToRotator(prediction - game_data::my_player.location_);
                     FRotator& aim_rotator_reference = aim_rotator;
                     game_data::local_player_controller->SetRotation(aim_rotator_reference);
@@ -919,6 +936,23 @@ void Tick(void) {
             bool result = abstraction::my_weapon_object.PredictAimAtTarget(&player_world_object, &prediction, muzzle_offset);
 
             if (result) {
+                static const bool use_trace = true;
+                if (use_trace) {
+                    static FVector hit_location;
+                    static FVector hit_normal;
+                    static FTraceHitInfo hit_info;
+                    AActor* hitActor = game_data::local_player_controller->Trace(prediction, player->location_, false, FVector(), 0, &hit_location, &hit_normal, &hit_info);
+
+                    if (hitActor) {
+                        prediction = hit_location;
+                        if (player->location_.Z < hit_location.Z) {
+                            prediction.Z -= player->character_->CylinderComponent->CollisionHeight / 2;
+                        } else {
+                            prediction.Z += player->character_->CylinderComponent->CollisionHeight / 2;
+                        }
+                    }
+                }
+
                 FVector2D projection = game_functions::Project(prediction);
                 projections_of_predictions.push_back(projection);
                 // math::PrintVector(prediction, "Prediction");
@@ -1181,9 +1215,9 @@ struct RadarLocation {  // polar coordinates
 
     /*
     void Clear(void) {
-        r = 0;
-        theta = 0;
-        right = 0;
+                    r = 0;
+                    theta = 0;
+                    right = 0;
     }
     */
 };
@@ -1260,7 +1294,7 @@ void GetWeapon(void) {
                 weapon_parameters->ping_ = aimbot::aimbot_settings.ping_in_ms;
             } else {
                 weapon_parameters->ping_ = game_data::my_player.character_->PlayerReplicationInfo->ExactPing * 1000;
-                //cout << "Exact Ping" << game_data::my_player.character_->PlayerReplicationInfo->ExactPing << endl;
+                // cout << "Exact Ping" << game_data::my_player.character_->PlayerReplicationInfo->ExactPing << endl;
             }
 
             ATrProjectile* p = (ATrProjectile*)weapon->Spawn(weapon->WeaponProjectiles.Data[0], weapon, FName(0), FVector({-999999, -999999, -999999}), FRotator(), nullptr, 0);
@@ -1285,7 +1319,7 @@ void GetWeapon(void) {
         abstraction::my_weapon_object.SetWeaponType(abstraction::WeaponObject::WeaponType::kHitscan);
     }
 }
-}
+}  // namespace game_data
 
 namespace other {
 static struct OtherSettings { } other_settings; }  // namespace other
@@ -2090,7 +2124,7 @@ PROCESSEVENT_HOOK_FUNCTION(UEHookMain) {
         /*
         math::PrintRotator(game_data::local_player_controller->Rotation, "local_player_controller rotation");
         if (game_data::local_player_character) {
-            math::PrintRotator(game_data::local_player_character->Rotation, "local_player_character rotation");
+                        math::PrintRotator(game_data::local_player_character->Rotation, "local_player_character rotation");
         }
         */
 
@@ -2098,7 +2132,7 @@ PROCESSEVENT_HOOK_FUNCTION(UEHookMain) {
         LOG2("local_player_controller->myHUD", (DWORD)game_data::local_player_controller->myHUD);
         LOG2("local_player_controller->myHUD->Canvas", (DWORD)game_data::local_player_controller->myHUD->Canvas);
         if (validate::IsValid(game_data::local_player_character)) {
-            LOG2("local_player_character->GetTrHud()", (DWORD)game_data::local_player_character->GetTrHud());
+                        LOG2("local_player_character->GetTrHud()", (DWORD)game_data::local_player_character->GetTrHud());
         }
         */
 
@@ -2154,7 +2188,7 @@ bool AddHook(UFunction* function, _ProcessEvent hook) {
 void HookUnrealEngine(void) {
     keyManager.addKey(VK_LCONTROL, &aimbot::Reset);
 
-    //Hook32::JumpHook processevent_hook(0x00456F90, (DWORD)hooks::ProcessEventHook);
+    // Hook32::JumpHook processevent_hook(0x00456F90, (DWORD)hooks::ProcessEventHook);
     UFunction* ufunction = (UFunction*)UObject::FindObject<UFunction>((char*)ue::ufunction_to_hook);
     hooks::AddHook(ufunction, &UEHookMain);
 
@@ -2167,7 +2201,6 @@ void HookUnrealEngine(void) {
 
     config::LoadConfig("default.cfg");
     LOG("Finished hooking Unreal Engine 3 and setting up.");
-
 }
 
 void DrawImGuiInUE(void) {
@@ -2395,74 +2428,74 @@ void DrawImGuiInUE(void) {
 
             /*
             if (radar::radar_settings.show_flags) {
-                radar::RadarLocation radar_location = radar::friendly_flag_location;
+                            radar::RadarLocation radar_location = radar::friendly_flag_location;
 
-                float theta = radar_location.theta;
+                            float theta = radar_location.theta;
 
-                float y = radar_location.r * cos(theta) * visuals::radar_visual_settings.zoom_ * visuals::radar_visual_settings.zoom;
-                float x = radar_location.r * sin(theta) * visuals::radar_visual_settings.zoom_ * visuals::radar_visual_settings.zoom;
+                            float y = radar_location.r * cos(theta) * visuals::radar_visual_settings.zoom_ * visuals::radar_visual_settings.zoom;
+                            float x = radar_location.r * sin(theta) * visuals::radar_visual_settings.zoom_ * visuals::radar_visual_settings.zoom;
 
-                if (!radar_location.right)
-                    x = -abs(x);
+                            if (!radar_location.right)
+                                            x = -abs(x);
 
-                // float z = x;
-                // x = y;
-                // y = z;
+                            // float z = x;
+                            // x = y;
+                            // y = z;
 
-                ImVec2 v(center.x + x, center.y - y);
+                            ImVec2 v(center.x + x, center.y - y);
 
-                switch (visuals::radar_visual_settings.marker_style) {
-                    case visuals::MarkerStyle::kDot:
-                        imgui_draw_list->AddCircleFilled(v, marker_size, friendly_flag_marker_colour);
-                        break;
-                    case visuals::MarkerStyle::kCircle:
-                        imgui_draw_list->AddCircle(v, marker_size, friendly_flag_marker_colour, 0, marker_thickness);
-                        break;
-                    case visuals::MarkerStyle::kFilledSquare:
-                        imgui_draw_list->AddRectFilled({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, friendly_flag_marker_colour, 0);
-                        break;
-                    case visuals::MarkerStyle::kSquare:
-                        imgui_draw_list->AddRect({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, friendly_flag_marker_colour, 0, 0, marker_thickness);
-                        break;
-                    default:
-                        break;
-                }
+                            switch (visuals::radar_visual_settings.marker_style) {
+                                            case visuals::MarkerStyle::kDot:
+                                                            imgui_draw_list->AddCircleFilled(v, marker_size, friendly_flag_marker_colour);
+                                                            break;
+                                            case visuals::MarkerStyle::kCircle:
+                                                            imgui_draw_list->AddCircle(v, marker_size, friendly_flag_marker_colour, 0, marker_thickness);
+                                                            break;
+                                            case visuals::MarkerStyle::kFilledSquare:
+                                                            imgui_draw_list->AddRectFilled({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, friendly_flag_marker_colour, 0);
+                                                            break;
+                                            case visuals::MarkerStyle::kSquare:
+                                                            imgui_draw_list->AddRect({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, friendly_flag_marker_colour, 0, 0, marker_thickness);
+                                                            break;
+                                            default:
+                                                            break;
+                            }
             }
 
 
             if (radar::radar_settings.show_flags) {
-                radar::RadarLocation radar_location = radar::enemy_flag_location;
+                            radar::RadarLocation radar_location = radar::enemy_flag_location;
 
-                float theta = radar_location.theta;
+                            float theta = radar_location.theta;
 
-                float y = radar_location.r * cos(theta) * visuals::radar_visual_settings.zoom_ * visuals::radar_visual_settings.zoom;
-                float x = radar_location.r * sin(theta) * visuals::radar_visual_settings.zoom_ * visuals::radar_visual_settings.zoom;
+                            float y = radar_location.r * cos(theta) * visuals::radar_visual_settings.zoom_ * visuals::radar_visual_settings.zoom;
+                            float x = radar_location.r * sin(theta) * visuals::radar_visual_settings.zoom_ * visuals::radar_visual_settings.zoom;
 
-                if (!radar_location.right)
-                    x = -abs(x);
+                            if (!radar_location.right)
+                                            x = -abs(x);
 
-                // float z = x;
-                // x = y;
-                // y = z;
+                            // float z = x;
+                            // x = y;
+                            // y = z;
 
-                ImVec2 v(center.x + x, center.y - y);
+                            ImVec2 v(center.x + x, center.y - y);
 
-                switch (visuals::radar_visual_settings.marker_style) {
-                    case visuals::MarkerStyle::kDot:
-                        imgui_draw_list->AddCircleFilled(v, marker_size, enemy_flag_marker_colour);
-                        break;
-                    case visuals::MarkerStyle::kCircle:
-                        imgui_draw_list->AddCircle(v, marker_size, enemy_flag_marker_colour, 0, marker_thickness);
-                        break;
-                    case visuals::MarkerStyle::kFilledSquare:
-                        imgui_draw_list->AddRectFilled({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, enemy_flag_marker_colour, 0);
-                        break;
-                    case visuals::MarkerStyle::kSquare:
-                        imgui_draw_list->AddRect({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, enemy_flag_marker_colour, 0, 0, marker_thickness);
-                        break;
-                    default:
-                        break;
-                }
+                            switch (visuals::radar_visual_settings.marker_style) {
+                                            case visuals::MarkerStyle::kDot:
+                                                            imgui_draw_list->AddCircleFilled(v, marker_size, enemy_flag_marker_colour);
+                                                            break;
+                                            case visuals::MarkerStyle::kCircle:
+                                                            imgui_draw_list->AddCircle(v, marker_size, enemy_flag_marker_colour, 0, marker_thickness);
+                                                            break;
+                                            case visuals::MarkerStyle::kFilledSquare:
+                                                            imgui_draw_list->AddRectFilled({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, enemy_flag_marker_colour, 0);
+                                                            break;
+                                            case visuals::MarkerStyle::kSquare:
+                                                            imgui_draw_list->AddRect({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, enemy_flag_marker_colour, 0, 0, marker_thickness);
+                                                            break;
+                                            default:
+                                                            break;
+                            }
             }
             */
 
@@ -2517,6 +2550,8 @@ void DrawImGuiInUE(void) {
             ImGui::End();
         }
     }
+
+    config::freshly_loaded_config = false;
 
     if (dx9::imgui_show_menu) {
         static bool unused_boolean = true;
