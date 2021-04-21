@@ -32,6 +32,8 @@ extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam
 using namespace std;
 using namespace Hook32;
 
+extern bool ue::frame_is_ready = false;
+
 namespace dx9 {
 
 typedef HRESULT(__stdcall* BeginScene)(LPDIRECT3DDEVICE9);
@@ -75,7 +77,8 @@ VMTHook* draw_indexed_primitive_up_vmthook;
 VMTHook* set_texture_vmthook;
 JumpHook* end_scene_get_device_jumphook;
 
-bool show_menu = false;
+extern HANDLE game_dx_mutex = CreateMutex(NULL, false, NULL);
+bool imgui_show_menu = false;
 bool imgui_is_ready = false;
 
 // bool resolution_init = false;
@@ -167,13 +170,13 @@ bool LoadTextureFromFile(const char* filename, Image** out_image) {
 
 LRESULT WINAPI CustomWindowProcCallback(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_KEYDOWN) {
-        if (wParam == VK_F2) {
-            show_menu = !show_menu;
+        if (wParam == VK_INSERT) {
+            imgui_show_menu = !imgui_show_menu;
         }
     }
 
     ImGuiIO& io = ::ImGui::GetIO();
-    if (show_menu) {
+    if (imgui_show_menu) {
         io.MouseDrawCursor = true;
         ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
         // return true;
@@ -236,11 +239,13 @@ HRESULT __stdcall BeginSceneHook(LPDIRECT3DDEVICE9 device) {
 HRESULT __stdcall EndSceneHook(LPDIRECT3DDEVICE9 device) {
     // LOG_PRINT("In EndSceneHook function.");
 
+    DWORD dwWaitResult = WaitForSingleObject(game_dx_mutex, INFINITE);
+
     ImGui_ImplDX9_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    if (show_menu) {
+    if (imgui_show_menu && false) {
         ImGui::Begin("test", NULL);
         ImGui::Text("Example Text");
         ImGui::End();
@@ -265,6 +270,9 @@ HRESULT __stdcall EndSceneHook(LPDIRECT3DDEVICE9 device) {
     ImGui::EndFrame();
     ImGui::Render();
     ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+
+    ue::frame_is_ready = true;
+    ReleaseMutex(game_dx_mutex);
 
     HRESULT result = ((EndScene)end_scene_vmthook->GetOriginalFunction())(device);
     return result;
