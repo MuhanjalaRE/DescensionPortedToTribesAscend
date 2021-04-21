@@ -40,6 +40,9 @@
     <Filter Include="Resource Files\Other\Files">
       <UniqueIdentifier>{0825b91f-a476-4caf-8551-6fb87f207a12}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Resource Files\Detours">
+      <UniqueIdentifier>{6bcbe5b2-7ad2-48ad-8175-c4bb238bda66}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h">
@@ -92,6 +95,9 @@
     </ClInclude>
     <ClInclude Include="Other\Files\Files.h">
       <Filter>Resource Files\Other\Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Detours\detours.h">
+      <Filter>Resource Files\Detours</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

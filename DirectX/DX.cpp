@@ -9,7 +9,6 @@
 
 #include "DX.h"
 #include "Hook.h"
-#include "detours.h"
 #include "log.h"
 #include "ue.h"
 
@@ -18,9 +17,20 @@
 #include "imgui_impl_win32.h"
 #include "imgui_internal.h"
 
+#include "detours.h"
+
+#define USE_MID_FUNCTION_PRESENT_HOOK
+
 #define LOG
 #ifdef LOG
 #define LOG_PRINT(x) std::cout << x << std::endl
+void PrintMemory(void* address, int length) {
+    printf("Reading bytes from %X: ", (DWORD)address);
+    for (int i = 0; i < length; i++) {
+        printf("%02x ", *((char*)address + i) & 0xFF);
+    }
+    printf("\n");
+}
 #else
 #define LOG_PRINT(x) ;
 #endif
@@ -119,6 +129,8 @@ typedef HRESULT(__stdcall* DrawIndexedPrimitiveUP)(LPDIRECT3DDEVICE9, D3DPRIMITI
 
 typedef HRESULT(__stdcall* SetTexture)(LPDIRECT3DDEVICE9, DWORD, IDirect3DBaseTexture9*);
 
+typedef HRESULT(__stdcall* Present)(LPDIRECT3DDEVICE9, const RECT*, const RECT*, HWND, const RGNDATA*);
+
 HRESULT __stdcall BeginSceneHook(LPDIRECT3DDEVICE9 device);
 HRESULT __stdcall EndSceneGetDeviceHook(LPDIRECT3DDEVICE9 device);
 
@@ -131,6 +143,8 @@ HRESULT __stdcall DrawPrimitiveHook(LPDIRECT3DDEVICE9 device, D3DPRIMITIVETYPE P
 HRESULT __stdcall DrawIndexedPrimitiveUPHook(LPDIRECT3DDEVICE9 device, D3DPRIMITIVETYPE PrimitiveType, UINT MinVertexIndex, UINT NumVertices, UINT PrimitiveCount, CONST void* pIndexData, D3DFORMAT IndexDataFormat, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride);
 
 HRESULT __stdcall SetTextureHook(LPDIRECT3DDEVICE9 device, DWORD Stage, IDirect3DBaseTexture9* pTexture);
+
+HRESULT __stdcall PresentHook(LPDIRECT3DDEVICE9 device, const RECT* pSourceRect, const RECT* pDestRect, HWND hDestWindowOverride, const RGNDATA* pDirtyRegion);
 
 bool CreateDevice(void);
 // bool LoadTextureFromFile(const char* filename, PDIRECT3DTEXTURE9* out_texture, int* out_width, int* out_height);
@@ -149,6 +163,7 @@ VMTHook* draw_indexed_primitive_vmthook;
 VMTHook* draw_primitive_vmthook;
 VMTHook* draw_indexed_primitive_up_vmthook;
 VMTHook* set_texture_vmthook;
+VMTHook* present_vmthook;
 JumpHook* end_scene_get_device_jumphook;
 
 extern HANDLE game_dx_mutex = CreateMutex(NULL, false, NULL);
@@ -157,6 +172,10 @@ bool imgui_is_ready = false;
 
 // bool resolution_init = false;
 // ImVec2 resolution;
+
+DWORD present_mid_function_hook_end = NULL;
+void PresentMidFunctionHook(void);
+void DoImGuiDrawing(void);
 
 }  // namespace dx9
 
@@ -261,6 +280,44 @@ LRESULT WINAPI CustomWindowProcCallback(HWND hWnd, UINT msg, WPARAM wParam, LPAR
     return CallWindowProc(original_windowproc_callback, hWnd, msg, wParam, lParam);
 }
 
+void DoImGuiDrawing(void) {
+    DWORD dwWaitResult = WaitForSingleObject(game_dx_mutex, INFINITE);
+
+    ImGui_ImplDX9_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+
+    if (imgui_show_menu && false) {
+        ImGui::Begin("test", NULL);
+        ImGui::Text("Example Text");
+        ImGui::End();
+
+        ImGui::ShowDemoWindow();
+    }
+
+    ue::DrawImGuiInUE();
+
+    if (crosshair) {
+        ImVec2 resolution = ImGui::GetIO().DisplaySize;
+        ImVec2 top_left = {resolution.x / 2 - crosshair->width_ / 2, resolution.y / 2 - crosshair->height_ / 2};
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::SetNextWindowPos(top_left);
+        ImGui::Begin("crosshair_image", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+        ImGui::Image((void*)crosshair->texture_, ImVec2(crosshair->width_, crosshair->height_));
+        // ImGui::GetWindowDrawList()->AddCircleFilled({resolution.x / 2, resolution.y / 2}, 3, ImColor({0, 255, 0, 255}));
+        ImGui::End();
+        ImGui::PopStyleVar();
+    }
+
+    ImGui::EndFrame();
+    ImGui::Render();
+    ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+
+    ue::frame_is_ready = true;
+    ReleaseMutex(game_dx_mutex);
+}
+
 HRESULT __stdcall EndSceneGetDeviceHook(LPDIRECT3DDEVICE9 device) {
     LOG_PRINT("In EndSceneGetDeviceHook function.");
 
@@ -277,6 +334,28 @@ HRESULT __stdcall EndSceneGetDeviceHook(LPDIRECT3DDEVICE9 device) {
     draw_primitive_vmthook = new VMTHook(game_device, 81, DrawPrimitiveHook);
     draw_indexed_primitive_up_vmthook = new VMTHook(game_device, 84, DrawIndexedPrimitiveUPHook);
     set_texture_vmthook = new VMTHook(game_device, 65, SetTextureHook);
+
+#ifdef USE_MID_FUNCTION_PRESENT_HOOK
+    //PrintMemory((void*)VMTHook::GetFunctionFirstInstructionAddress(game_device, 17), 300);
+    DWORD present_mid_function_hook_address = VMTHook::GetFunctionFirstInstructionAddress(game_device, 17) + 0x26;
+    unsigned int hook_size = 0x2d - 0x26;
+    present_mid_function_hook_end = present_mid_function_hook_address + hook_size;
+    JumpHook present_mid_function_jumphook(present_mid_function_hook_address, (DWORD)PresentMidFunctionHook);
+
+    if (hook_size > JumpHook::number_of_bytes_to_overwrite_) {
+        // NOP the extra assembly instructions
+        static const BYTE asm_nop = 0x90;
+        DWORD protection;
+        VirtualProtect((void*)(present_mid_function_hook_address + JumpHook::number_of_bytes_to_overwrite_), hook_size - JumpHook::number_of_bytes_to_overwrite_, PAGE_EXECUTE_READWRITE, &protection);
+        for (int i = 0; i < hook_size - JumpHook::number_of_bytes_to_overwrite_; i++) {
+            *((BYTE*)(present_mid_function_hook_address + JumpHook::number_of_bytes_to_overwrite_ + i)) = asm_nop;
+        }
+        VirtualProtect((void*)(present_mid_function_hook_address + JumpHook::number_of_bytes_to_overwrite_), hook_size - JumpHook::number_of_bytes_to_overwrite_, protection, &protection);
+    }
+    //PrintMemory((void*)VMTHook::GetFunctionFirstInstructionAddress(game_device, 17), 300);
+#endif
+
+    present_vmthook = new VMTHook(game_device, 17, PresentHook);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -315,41 +394,9 @@ HRESULT __stdcall BeginSceneHook(LPDIRECT3DDEVICE9 device) {
 HRESULT __stdcall EndSceneHook(LPDIRECT3DDEVICE9 device) {
     // LOG_PRINT("In EndSceneHook function.");
 
-    DWORD dwWaitResult = WaitForSingleObject(game_dx_mutex, INFINITE);
-
-    ImGui_ImplDX9_NewFrame();
-    ImGui_ImplWin32_NewFrame();
-    ImGui::NewFrame();
-
-    if (imgui_show_menu && false) {
-        ImGui::Begin("test", NULL);
-        ImGui::Text("Example Text");
-        ImGui::End();
-
-        ImGui::ShowDemoWindow();
-    }
-
-    ue::DrawImGuiInUE();
-
-    if (crosshair) {
-        ImVec2 resolution = ImGui::GetIO().DisplaySize;
-        ImVec2 top_left = {resolution.x / 2 - crosshair->width_ / 2, resolution.y / 2 - crosshair->height_ / 2};
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::SetNextWindowPos(top_left);
-        ImGui::Begin("crosshair_image", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBringToFrontOnFocus);
-        ImGui::Image((void*)crosshair->texture_, ImVec2(crosshair->width_, crosshair->height_));
-        //ImGui::GetWindowDrawList()->AddCircleFilled({resolution.x / 2, resolution.y / 2}, 3, ImColor({0, 255, 0, 255}));
-        ImGui::End();
-        ImGui::PopStyleVar();
-    }
-
-    ImGui::EndFrame();
-    ImGui::Render();
-    ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
-
-    ue::frame_is_ready = true;
-    ReleaseMutex(game_dx_mutex);
+#ifndef USE_MID_FUNCTION_PRESENT_HOOK
+    DoImGuiDrawing();
+#endif
 
     HRESULT result = ((EndScene)end_scene_vmthook->GetOriginalFunction())(device);
     return result;
@@ -382,6 +429,28 @@ HRESULT __stdcall DrawIndexedPrimitiveUPHook(LPDIRECT3DDEVICE9 device, D3DPRIMIT
 HRESULT __stdcall SetTextureHook(LPDIRECT3DDEVICE9 device, DWORD Stage, IDirect3DBaseTexture9* pTexture) {
     HRESULT result = ((SetTexture)(set_texture_vmthook->GetOriginalFunction()))(device, Stage, pTexture);
     return result;
+}
+
+HRESULT __stdcall PresentHook(LPDIRECT3DDEVICE9 device, const RECT* pSourceRect, const RECT* pDestRect, HWND hDestWindowOverride, const RGNDATA* pDirtyRegion) {
+    HRESULT result = ((Present)(present_vmthook->GetOriginalFunction()))(device, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion);
+    return result;
+}
+
+void PresetMidFunctionHookFunction(void) {
+    DoImGuiDrawing();
+}
+
+__declspec(naked) void PresentMidFunctionHook(void) {
+    // call something
+
+    PresetMidFunctionHookFunction();
+
+    __asm {
+        // do the instructions overwritten
+        test DWORD PTR [esi+0x30],0x2
+        mov eax, present_mid_function_hook_end
+        jmp eax
+    }
 }
 
 }  // namespace dx9

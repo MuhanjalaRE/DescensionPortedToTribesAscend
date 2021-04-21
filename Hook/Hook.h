@@ -11,8 +11,9 @@ class Hook32 {
 };
 
 class JumpHook : public Hook32 {
-   private:
+   public:
     static const BYTE number_of_bytes_to_overwrite_ = 5;
+   private:
     BYTE original_bytes_[number_of_bytes_to_overwrite_];
     DWORD hook_address_;
 

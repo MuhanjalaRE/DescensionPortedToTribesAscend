@@ -17,6 +17,7 @@ bool JumpHook::Hook(DWORD source, DWORD destination) {
 
         *((BYTE*)source) = asm_jump;
         *((long*)(source + 1)) = offset;
+
         VirtualProtect((void*)source, number_of_bytes_to_overwrite_, protection, &protection);
 
         hook_address_ = source;

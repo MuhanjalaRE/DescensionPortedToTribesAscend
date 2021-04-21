@@ -21,12 +21,12 @@
 
 #include "SDK.h"
 
-#include "detours.h"
-
 #include "Hook.h"
 #include "log.h"
 
 #include <unordered_map>
+
+#include "detours.h"
 
 using json = nlohmann::json;
 using namespace std;
@@ -2115,7 +2115,7 @@ PROCESSEVENT_HOOK_FUNCTION(UEHookMain) {
 }
 
 namespace hooks {
-void __declspec(naked) __fastcall ProcessEvent(UObject* uo, void* unused, UFunction* uf, void* p, void* r) {
+void __declspec(naked) __fastcall __ProcessEvent__(UObject* uo, void* unused, UFunction* uf, void* p, void* r) {
     _asm {
 		push ebp
 		mov ebp, esp
@@ -2129,6 +2129,8 @@ void __declspec(naked) __fastcall ProcessEvent(UObject* uo, void* unused, UFunct
 typedef void(__fastcall* _ProcessEvent)(UObject*, void*, UFunction*, void*, void*);
 unordered_map<UFunction*, vector<_ProcessEvent>> hooks;
 
+_ProcessEvent original_processevent = NULL;
+
 void __fastcall ProcessEventHook(UObject* object, void* unused, UFunction* function, void* p, void* r) {
     if (hooks.find(function) != hooks.end()) {
         vector<_ProcessEvent>& hooks_ = hooks[function];
@@ -2136,7 +2138,7 @@ void __fastcall ProcessEventHook(UObject* object, void* unused, UFunction* funct
             (*hook)(object, NULL, function, p, r);
         }
     }
-    ProcessEvent(object, NULL, function, p, r);
+    original_processevent(object, NULL, function, p, r);
 }
 
 bool AddHook(UFunction* function, _ProcessEvent hook) {
@@ -2152,9 +2154,16 @@ bool AddHook(UFunction* function, _ProcessEvent hook) {
 void HookUnrealEngine(void) {
     keyManager.addKey(VK_LCONTROL, &aimbot::Reset);
 
-    Hook32::JumpHook processevent_hook(0x00456F90, (DWORD)hooks::ProcessEventHook);
+    //Hook32::JumpHook processevent_hook(0x00456F90, (DWORD)hooks::ProcessEventHook);
     UFunction* ufunction = (UFunction*)UObject::FindObject<UFunction>((char*)ue::ufunction_to_hook);
     hooks::AddHook(ufunction, &UEHookMain);
+
+    hooks::original_processevent = (hooks::_ProcessEvent)g_dwProcessEvent;
+
+    DetourTransactionBegin();
+    DetourUpdateThread(GetCurrentThread());
+    DetourAttach(&(PVOID&)hooks::original_processevent, hooks::ProcessEventHook);
+    DetourTransactionCommit();
 
     config::LoadConfig("default.cfg");
     LOG("Finished hooking Unreal Engine 3 and setting up.");
