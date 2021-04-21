@@ -5,6 +5,8 @@
 #include "imgui_impl_dx9.h"
 #include "imgui_impl_win32.h"
 
+#include "Other/Files/Files.h"
+#include "Other/JSON/json.hpp"
 #include "Other/Keys/Keys.h"
 
 #include <chrono>
@@ -26,6 +28,7 @@
 
 #include <unordered_map>
 
+using json = nlohmann::json;
 using namespace std;
 using namespace UE_Utilities;
 
@@ -181,6 +184,7 @@ namespace math {
 #define RAD2DEG(x) ((float)(x) * (float)(180.f / M_PI_F))
 #define INV_PI (0.31830988618f)
 #define HALF_PI (1.57079632679f)
+#define Const_RadToUnrRot 10430.3783504704527
 
 void PrintVector(FVector f, const char* str) {
     cout << str << " : {" << f.X << ", " << f.Y << ", " << f.Z << "}" << endl;
@@ -232,7 +236,6 @@ FVector RotatorToVector_(FRotator rotation) {
 
 FVector RotatorToVector(const FRotator& R) {
     FVector Vec;
-    static const float Const_RadToUnrRot = 10430.3783504704527;
     float fYaw = R.Yaw * (1 / Const_RadToUnrRot);
     float fPitch = R.Pitch * (1 / Const_RadToUnrRot);
     float CosPitch = cos(fPitch);
@@ -244,6 +247,16 @@ FVector RotatorToVector(const FRotator& R) {
 }
 
 FRotator VectorToRotator(FVector v) {
+    FRotator rotator;
+
+    rotator.Yaw = atan2(v.Y, v.X) * Const_RadToUnrRot;
+    rotator.Pitch = atan2(v.Z, sqrt((v.X * v.X) + (v.Y * v.Y))) * Const_RadToUnrRot;
+    rotator.Roll = 0;  // No roll
+
+    return rotator;
+}
+
+FRotator VectorToRotator_(FVector v) {
     FRotator rotator;
     rotator.Yaw = RAD2DEG(atan2(v.Y, v.X));
     rotator.Pitch = RAD2DEG(atan2(v.Z, sqrt((v.X * v.X) + (v.Y * v.Y))));
@@ -355,7 +368,7 @@ static class WeaponObject {
     static struct WeaponParameters {
         float bullet_speed_;
         float inheritence_;
-        float ping_;
+        float ping_; // in ms
         float self_compensation_ping_ = 0;
         bool use_inheritance = true;
         bool use_acceleration = false;
@@ -555,14 +568,14 @@ static class GameData {
 static game_data::information::Player& my_player = game_data::game_data.my_player_information;
 
 void GetPlayers(void) {
-    local_player_character = (Character*)local_player_controller->Pawn;
-    if (!validate::IsValid(local_player_character)) {
+    if (!validate::IsValid(local_player_character) && false) {
         return;
     }
 
     bool my_player_character_found = false;
 
-    APawn* pawns = local_player_controller->Pawn->WorldInfo->PawnList;
+    // APawn* pawns = local_player_controller->Pawn->WorldInfo->PawnList;
+    APawn* pawns = local_player_controller->WorldInfo->PawnList;
     APawn* pawn = pawns;
 
     while (pawn != NULL) {
@@ -592,46 +605,13 @@ void GetPlayers(void) {
     }
 
     if (!my_player_character_found) {
-        return;
+        my_player.rotation_ = local_player_controller->Rotation;
+        my_player.forward_vector_ = math::RotatorToVector(my_player.rotation_);
+        // return;
     }
 }
 
-void GetWeapon(void) {
-    if (!my_player.is_valid_) {
-        return;
-    }
-
-    ATrDevice* weapon = (ATrDevice*)my_player.character_->Weapon;
-    if (weapon) {
-        game_data::my_player.weapon_ = game_data::Weapon::found;
-        if (weapon->bInstantHit && !weapon->IsA(ATrDevice_ConstantFire::StaticClass())) {
-            abstraction::my_weapon_object.SetWeaponType(abstraction::WeaponObject::WeaponType::kHitscan);
-        } else {
-            static abstraction::WeaponObject::WeaponParameters* weapon_parameters = abstraction::my_weapon_object.GetWeaponParameters();
-            static abstraction::WeaponObject::WeaponAimbotParameters* aimbot_parameters = abstraction::my_weapon_object.GetAimbotParameters();
-
-            ATrProjectile* p = (ATrProjectile*)weapon->Spawn(weapon->WeaponProjectiles.Data[0], weapon, FName(0), FVector({-999999, -999999, -999999}), FRotator(), nullptr, 0);
-            if (p) {
-                weapon_parameters->bullet_speed_ = p->Speed;
-                weapon_parameters->inheritence_ = p->m_fMaxProjInheritPct;
-                abstraction::my_weapon_object.SetWeaponType(abstraction::WeaponObject::WeaponType::kProjectileLinear);
-
-                p->ImpactSound = NULL;
-                p->SpawnSound = NULL;
-                p->SetCollisionSize(0, 0);
-                p->bHidden = true;
-                p->Velocity = {0, 0, 0};
-                p->Destroy();
-
-            } else {
-                game_data::my_player.weapon_ = game_data::Weapon::unknown;
-            }
-        }
-    } else {
-        my_player.weapon_ == Weapon::none;
-        abstraction::my_weapon_object.SetWeaponType(abstraction::WeaponObject::WeaponType::kHitscan);
-    }
-}
+void GetWeapon(void);
 
 void GetGameData(void) {
     game_data.Reset();
@@ -647,6 +627,12 @@ bool InLineOfSight(AActor* actor) {
 }
 
 FVector2D Project(FVector location) {
+    FVector projection_3d = game_data::local_player_controller->myHUD->Canvas->Project(location);
+    return {projection_3d.X, projection_3d.Y};
+    // return {0, 0};
+}
+
+FVector2D Project_UsingCharacter(FVector location) {
     FVector2D projection;
     if (game_data::local_player_character) {
         ATrHUD* hud = game_data::local_player_character->GetTrHud();
@@ -702,15 +688,12 @@ static struct AimbotSettings {
     AimbotMode aimbot_mode = AimbotMode::kClosestXhair;
 
     bool enabled = true;  // enabling really just enables aimassist, this isnt really an aimbot
-    bool use_custom_ping = true;
+    bool use_custom_ping = false;
     bool auto_aim = false;        // this enables the aimbot
     bool target_everyone = true;  // if we want to do prediction on every single player
 
-    float tempest_ping_in_ms = 0;   //-90
-    float chaingun_ping_in_ms = 0;  //-50
-    float grenadelauncher_ping_in_ms = 0;
-    float plasmagun_ping_in_ms = 0;
-    float blaster_ping_in_ms = 0;
+    float ping_in_ms = 0;  //-90
+    float unknowndata00[4];
 
     int maximum_iterations = 10;
     int epsilon = 0.05;
@@ -890,7 +873,8 @@ void Tick(void) {
     FVector muzzle_offset;
 
     if (use_muzzle_location) {
-        muzzle_offset = game_data::my_player.character_->Weapon->FireOffset;
+        //muzzle_offset = game_data::my_player.character_->Weapon->FireOffset;
+        muzzle_offset = game_data::my_player.character_->eventGetWeaponStartTraceLocation(game_data::my_player.character_->Weapon) - game_data::my_player.location_;
     }
 
     if (!aimbot_settings.target_everyone) {
@@ -905,7 +889,7 @@ void Tick(void) {
                 projections_of_predictions.push_back(projection);
 
                 if (aimbot_settings.auto_aim) {
-                    prediction.Z -= aimbot_settings.aimbot_offset.Z;
+                    prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight/2;
                     FRotator aim_rotator = math::VectorToRotator(prediction - game_data::my_player.location_);
                     FRotator& aim_rotator_reference = aim_rotator;
                     game_data::local_player_controller->SetRotation(aim_rotator_reference);
@@ -964,6 +948,7 @@ static Timer get_esp_data_timer(esp_settings.poll_frequency);
 struct ESPInformation {
     FVector2D projection;  // center
     float height;          // height for box/rectangle
+    float width;           // width for box/rectangle
     bool is_friendly = false;
     string name;
 };
@@ -997,9 +982,9 @@ void Tick(void) {
             continue;
 
         FVector2D center_projection = game_functions::Project(player->location_);
-        player->location_.Z += esp_settings.player_height;  // this is HALF the height in reality
+        player->location_.Z += player->character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
         FVector2D head_projection = game_functions::Project(player->location_);
-        player->location_.Z -= esp_settings.player_height;  // this is HALF the height in reality
+        player->location_.Z -= player->character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
         float height = abs(head_projection.Y - center_projection.Y);
 
         string name;
@@ -1007,10 +992,176 @@ void Tick(void) {
             // name = player->player_state_->PlayerName.ToString();
         }
 
-        esp_information.push_back({center_projection, height, same_team, name});
+        esp_information.push_back({center_projection, height, height * (player->character_->CylinderComponent->CollisionRadius / player->character_->CylinderComponent->CollisionHeight), same_team, name});
     }
 }
 }  // namespace esp
+
+namespace routes {
+struct RouteSettings {
+    bool enabled = false;
+    int route_poll_frequency = 60;
+    bool swap_team = false;
+    bool find_route_closest_to_spawn = true;
+    bool show_route_name = true;
+} route_settings;
+
+bool route_file_is_loaded = false;
+static json loaded_route_file;
+
+struct RouteTrail {
+    string routeName;
+    string routeDescription;
+    int teamId;
+    FVector flagGrabMarker_location;
+    vector<FVector> markerLocations;
+};
+
+struct Routes {
+    string mapName;
+    string author;
+    vector<struct RouteTrail> routeTrails;
+
+    int selected_route_trail_index = 0;
+    const char* route_trail_names[256];
+} loaded_routes;
+
+struct SelectedRouteInfo {
+} selected_route_info;
+
+bool ParseLoadedRouteFile(void) {
+    loaded_routes.mapName = loaded_route_file["mapName"].get<std::string>();
+    loaded_routes.author = loaded_route_file["author"].get<std::string>();
+
+    loaded_routes.routeTrails.clear();
+    loaded_routes.selected_route_trail_index = 0;
+
+    json route_trails = loaded_route_file["routeTrails"];
+
+    for (json::iterator it = route_trails.begin(); it != route_trails.end(); ++it) {
+        RouteTrail route_trail;
+        route_trail.routeName = (*it)["routeName"].get<std::string>();
+        route_trail.routeDescription = (*it)["routeDescription"].get<std::string>();
+        route_trail.teamId = (*it)["teamId"].get<int>();
+        route_trail.flagGrabMarker_location.X = (*it)["flagGrabMarker"]["location"]["x"].get<float>();
+        route_trail.flagGrabMarker_location.Y = (*it)["flagGrabMarker"]["location"]["y"].get<float>();
+        route_trail.flagGrabMarker_location.Z = (*it)["flagGrabMarker"]["location"]["z"].get<float>();
+
+        json marker_locations = (*it)["markerLocations"];
+        for (json::iterator it = marker_locations.begin(); it != marker_locations.end(); it++) {
+            FVector location;
+            location.X = (*it)["location"]["x"].get<float>();
+            location.Y = (*it)["location"]["y"].get<float>();
+            location.Z = (*it)["location"]["z"].get<float>();
+            route_trail.markerLocations.push_back(location);
+        }
+
+        loaded_routes.routeTrails.push_back(route_trail);
+    }
+
+    for (int i = 0; i < loaded_routes.routeTrails.size(); i++) {
+        loaded_routes.route_trail_names[i] = loaded_routes.routeTrails[i].routeName.c_str();
+    }
+
+    return false;
+}
+
+bool LoadRouteFile(const char* filename) {
+    std::ifstream ifs(filename);
+    loaded_route_file = json::parse(ifs);
+    ParseLoadedRouteFile();
+    route_file_is_loaded = true;
+    return false;
+}
+
+Timer route_draw_poll_timer(route_settings.route_poll_frequency);
+
+vector<FVector2D> projections_of_markers;
+// vector<FVector2D> projections_of_markers2;
+vector<int> index_of_projections_of_markers;
+
+void Tick(void) {
+    if (route_file_is_loaded && route_settings.enabled && game_data::my_player.just_respawned && route_settings.find_route_closest_to_spawn) {
+        // loaded_routes.selected_route_trail_index = 0;
+        float distance = -1;
+        int index = 0;
+        for (vector<struct RouteTrail>::iterator i = loaded_routes.routeTrails.begin(); i != loaded_routes.routeTrails.end(); i++) {
+            FVector start_location = i->markerLocations[0];
+            if (route_settings.swap_team) {
+                start_location.X *= -1;
+                start_location.Y *= -1;
+            }
+            float d = (start_location - game_data::my_player.location_).Magnitude();
+            if (d < distance || distance < 0) {
+                distance = d;
+                loaded_routes.selected_route_trail_index = index;
+            }
+            index++;
+        }
+    }
+
+    if (!route_draw_poll_timer.isReady() || !route_file_is_loaded || !route_settings.enabled)
+        return;
+
+    // route_draw_poll_timer.Tick();
+
+    projections_of_markers.clear();
+    // projections_of_markers2.clear();
+    index_of_projections_of_markers.clear();
+
+    if (!game_data::my_player.is_valid_)
+        ;  // return;
+
+    // Rotator rotation = game_data::my_player_object.GetRotation();
+    // Vector rotation_vector = math::RotatorToVector(rotation);
+
+    if (route_settings.enabled && route_file_is_loaded) {
+        vector<FVector>* locations = &loaded_routes.routeTrails[loaded_routes.selected_route_trail_index].markerLocations;
+        int route_trail_team_id = loaded_routes.routeTrails[loaded_routes.selected_route_trail_index].teamId;
+
+        int j = -1;
+        for (vector<FVector>::iterator i = locations->begin(); i != locations->end(); i++) {
+            j++;
+            FVector marker_location = *i;
+
+            if (route_settings.swap_team) {
+                marker_location.X *= -1;
+                marker_location.Y *= -1;
+            }
+
+            if (!game_functions::IsInFieldOfView(marker_location))
+                continue;
+
+            static FVector2D projection_vector;
+            projection_vector = game_functions::Project(marker_location);
+            projections_of_markers.push_back(projection_vector);
+            index_of_projections_of_markers.push_back(j);
+        }
+    }
+}
+
+void NextRouteTrail(void) {
+    if (!route_file_is_loaded) {
+        return;
+    }
+    if (loaded_routes.routeTrails.size() > 0) {
+        loaded_routes.selected_route_trail_index = (loaded_routes.selected_route_trail_index + 1) % loaded_routes.routeTrails.size();
+    }
+}
+
+void PreviousRouteTrail(void) {
+    if (!route_file_is_loaded) {
+        return;
+    }
+    if (loaded_routes.routeTrails.size() > 0) {
+        loaded_routes.selected_route_trail_index--;
+        if (loaded_routes.selected_route_trail_index < 0) {
+            loaded_routes.selected_route_trail_index += loaded_routes.routeTrails.size();
+        }
+    }
+}
+
+}  // namespace routes
 
 namespace radar {
 static struct RadarSettings {
@@ -1091,10 +1242,163 @@ void Tick(void) {
 
 }  // namespace radar
 
+namespace game_data {
+void GetWeapon(void) {
+    if (!my_player.is_valid_) {
+        return;
+    }
+
+    ATrDevice* weapon = (ATrDevice*)my_player.character_->Weapon;
+    if (weapon) {
+        game_data::my_player.weapon_ = game_data::Weapon::found;
+        if (weapon->bInstantHit && !weapon->IsA(ATrDevice_ConstantFire::StaticClass())) {
+            abstraction::my_weapon_object.SetWeaponType(abstraction::WeaponObject::WeaponType::kHitscan);
+        } else {
+            static abstraction::WeaponObject::WeaponParameters* weapon_parameters = abstraction::my_weapon_object.GetWeaponParameters();
+            static abstraction::WeaponObject::WeaponAimbotParameters* aimbot_parameters = abstraction::my_weapon_object.GetAimbotParameters();
+            if (aimbot::aimbot_settings.use_custom_ping) {
+                weapon_parameters->ping_ = aimbot::aimbot_settings.ping_in_ms;
+            } else {
+                weapon_parameters->ping_ = game_data::my_player.character_->PlayerReplicationInfo->ExactPing * 1000;
+                //cout << "Exact Ping" << game_data::my_player.character_->PlayerReplicationInfo->ExactPing << endl;
+            }
+
+            ATrProjectile* p = (ATrProjectile*)weapon->Spawn(weapon->WeaponProjectiles.Data[0], weapon, FName(0), FVector({-999999, -999999, -999999}), FRotator(), nullptr, 0);
+            if (p) {
+                weapon_parameters->bullet_speed_ = p->Speed;
+                weapon_parameters->inheritence_ = p->m_fMaxProjInheritPct;
+                abstraction::my_weapon_object.SetWeaponType(abstraction::WeaponObject::WeaponType::kProjectileLinear);
+
+                p->ImpactSound = NULL;
+                p->SpawnSound = NULL;
+                p->SetCollisionSize(0, 0);
+                p->bHidden = true;
+                p->Velocity = {0, 0, 0};
+                p->Destroy();
+
+            } else {
+                game_data::my_player.weapon_ = game_data::Weapon::unknown;
+            }
+        }
+    } else {
+        my_player.weapon_ == Weapon::none;
+        abstraction::my_weapon_object.SetWeaponType(abstraction::WeaponObject::WeaponType::kHitscan);
+    }
+}
+}
+
+namespace other {
+static struct OtherSettings { } other_settings; }  // namespace other
+
+namespace config {
+
+static bool freshly_loaded_config = false;
+
+void WriteDataToFile(void* data, int size, FILE* file) {
+    fwrite(&size, sizeof(int), 1, file);
+    fwrite(data, size, 1, file);
+}
+
+void ReadDataFromFile(void* data, int size, FILE* file) {
+    int struct_size;
+    fread(&struct_size, sizeof(int), 1, file);
+    fread(data, struct_size, 1, file);
+}
+
+bool SaveConfig(const char* filename) {
+    FILE* save_config_file = fopen(filename, "wb");
+    FILE* file = save_config_file;
+
+    if (save_config_file) {
+        using namespace imgui;
+
+        int struct_size = 0;
+
+        // Imgui menu settings
+        WriteDataToFile(&imgui::imgui_settings, sizeof(imgui::imgui_settings), file);
+
+        // Aimbot settings
+        WriteDataToFile(&aimbot::aimbot_settings, sizeof(aimbot::aimbot_settings), file);
+        WriteDataToFile(&visuals::aimbot_visual_settings, sizeof(visuals::aimbot_visual_settings), file);
+
+        // Route settings
+        WriteDataToFile(&routes::route_settings, sizeof(routes::route_settings), file);
+        WriteDataToFile(&visuals::route_visual_settings, sizeof(visuals::route_visual_settings), file);
+
+        // ESP settings
+        WriteDataToFile(&esp::esp_settings, sizeof(esp::esp_settings), file);
+        WriteDataToFile(&visuals::esp_visual_settings, sizeof(visuals::esp_visual_settings), file);
+
+        // Radar settings
+        WriteDataToFile(&radar::radar_settings, sizeof(radar::radar_settings), file);
+        WriteDataToFile(&visuals::radar_visual_settings, sizeof(visuals::radar_visual_settings), file);
+
+        // Other settings
+        WriteDataToFile(&other::other_settings, sizeof(other::other_settings), file);
+
+        // Crosshair settings
+        WriteDataToFile(&visuals::crosshair_settings, sizeof(visuals::crosshair_settings), file);
+
+        fclose(save_config_file);
+        return true;
+    }
+    return false;
+}
+
+bool LoadConfig(const char* filename) {
+    LOG2("Loading config", string(filename));
+    FILE* load_config_file = fopen(filename, "rb");
+    FILE* file = load_config_file;
+
+    if (load_config_file) {
+        using namespace imgui;
+
+        int struct_size = 0;
+
+        // Imgui menu settings
+        ReadDataFromFile(&imgui::imgui_settings, sizeof(imgui::imgui_settings), file);
+
+        // Aimbot settings
+        ReadDataFromFile(&aimbot::aimbot_settings, sizeof(aimbot::aimbot_settings), file);
+        ReadDataFromFile(&visuals::aimbot_visual_settings, sizeof(visuals::aimbot_visual_settings), file);
+
+        // Route settings
+        ReadDataFromFile(&routes::route_settings, sizeof(routes::route_settings), file);
+        ReadDataFromFile(&visuals::route_visual_settings, sizeof(visuals::route_visual_settings), file);
+
+        // ESP settings
+        ReadDataFromFile(&esp::esp_settings, sizeof(esp::esp_settings), file);
+        ReadDataFromFile(&visuals::esp_visual_settings, sizeof(visuals::esp_visual_settings), file);
+
+        // Radar settings
+        ReadDataFromFile(&radar::radar_settings, sizeof(radar::radar_settings), file);
+        ReadDataFromFile(&visuals::radar_visual_settings, sizeof(visuals::radar_visual_settings), file);
+
+        // Other settings
+        ReadDataFromFile(&other::other_settings, sizeof(other::other_settings), file);
+
+        // Crosshair settings
+        ReadDataFromFile(&visuals::crosshair_settings, sizeof(visuals::crosshair_settings), file);
+
+        aimbot::aimbot_poll_timer.SetFrequency(aimbot::aimbot_settings.aimbot_poll_frequency);
+        routes::route_draw_poll_timer.SetFrequency(routes::route_settings.route_poll_frequency);
+        radar::get_radar_data_timer.SetFrequency(radar::radar_settings.radar_poll_frequency);
+        esp::get_esp_data_timer.SetFrequency(esp::esp_settings.poll_frequency);
+        esp::esp_settings.show_names = false;
+
+        fclose(load_config_file);
+
+        freshly_loaded_config = true;
+        return true;
+    }
+    return false;
+}
+}  // namespace config
+
 namespace imgui {
 namespace imgui_menu {
 enum LeftMenuButtons { kAimAssist, kAimbot, kESP, kRadar, kOther, kAimTracker, kRoutes, kOptions, kCrosshair, kSkinChanger, kConfigs, kCredits, kLua, kBindings, kPID, kTraining };
-static const char* button_text[] = {"Aim assist", "-", "ESP", "Radar", "Other", "-", "Routes", "-", "Crosshair", "Shop", "Configs", "-", "-", "-", "-", "Training"};
+static const char* button_text[] = {"Aim assist", "-", "ESP", "Radar", "-", "-", "-", "-", "Crosshair", "-", "Configs", "-", "-", "-", "-", "-"};
 // static const char* button_text[] = {"-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "Scripting", "-", "-"};
 static const int buttons_num = sizeof(button_text) / sizeof(char*);
 static int selected_index = LeftMenuButtons::kAimAssist;
@@ -1154,16 +1458,23 @@ void DrawAimAssistMenu(void) {
     ImGui::Separator();
     // ImGui::PopStyleColor();
 
-    // ImGui::Checkbox("Use inheritance", &game_data::my_player_object.GetWeapon()->GetAimbotParameters()->use_inheritance);
-    ImGui::PushItemWidth(100 + 0 * ImGui::GetWindowWidth() * 0.75);
-    ImGui::SliderFloat("Tempest ping", &aimbot::aimbot_settings.tempest_ping_in_ms, -300, 300);
-    ImGui::SliderFloat("Chain gun ping", &aimbot::aimbot_settings.chaingun_ping_in_ms, -300, 300);
-    ImGui::SliderFloat("Grenade launcher ping", &aimbot::aimbot_settings.grenadelauncher_ping_in_ms, -300, 300);
-    ImGui::SliderFloat("Plasma gun ping", &aimbot::aimbot_settings.plasmagun_ping_in_ms, -300, 300);
-    ImGui::SliderFloat("Blaster ping", &aimbot::aimbot_settings.blaster_ping_in_ms, -300, 300);
-    ImGui::SliderFloat("Self compensation ping", &aimbot::aimbot_settings.self_compensation_time_in_ms, -300, 300);
-    // ImGui::SliderFloat("Tempest ping", &aimbot::aimbot_settings.tempest_ping_in_ms, -200, 200);
-    ImGui::PopItemWidth();
+    ImGui::Checkbox("Use custom ping value", &aimbot::aimbot_settings.use_custom_ping);
+
+    if (aimbot::aimbot_settings.use_custom_ping) {
+        // ImGui::Checkbox("Use inheritance", &game_data::my_player_object.GetWeapon()->GetAimbotParameters()->use_inheritance);
+        ImGui::PushItemWidth(100 + 0 * ImGui::GetWindowWidth() * 0.75);
+        ImGui::SliderFloat("Custom ping", &aimbot::aimbot_settings.ping_in_ms, -300, 300);
+        /*
+        ImGui::SliderFloat("Tempest ping", &aimbot::aimbot_settings.tempest_ping_in_ms, -300, 300);
+        ImGui::SliderFloat("Chain gun ping", &aimbot::aimbot_settings.chaingun_ping_in_ms, -300, 300);
+        ImGui::SliderFloat("Grenade launcher ping", &aimbot::aimbot_settings.grenadelauncher_ping_in_ms, -300, 300);
+        ImGui::SliderFloat("Plasma gun ping", &aimbot::aimbot_settings.plasmagun_ping_in_ms, -300, 300);
+        ImGui::SliderFloat("Blaster ping", &aimbot::aimbot_settings.blaster_ping_in_ms, -300, 300);
+        ImGui::SliderFloat("Self compensation ping", &aimbot::aimbot_settings.self_compensation_time_in_ms, -300, 300);
+        // ImGui::SliderFloat("Tempest ping", &aimbot::aimbot_settings.tempest_ping_in_ms, -200, 200);
+        */
+        ImGui::PopItemWidth();
+    }
 
     ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(2 * 0.05, 2 * 0.05, 2 * 0.05, 2 * 0.1));
     ImGui::Separator();
@@ -1204,7 +1515,7 @@ void DrawAimAssistMenu(void) {
         ImGui::Separator();
         ImGui::Checkbox("Auto aim", &aimbot::aimbot_settings.auto_aim);
 
-        if (aimbot::aimbot_settings.auto_aim) {
+        if (aimbot::aimbot_settings.auto_aim && false) {
             ImGui::PushItemWidth(100);
             ImGui::SliderFloat("Aimbot offset X", &aimbot::aimbot_settings.aimbot_offset.X, -300, 300);
             ImGui::SliderFloat("Aimbot offset Y", &aimbot::aimbot_settings.aimbot_offset.Y, -300, 300);
@@ -1212,6 +1523,23 @@ void DrawAimAssistMenu(void) {
             ImGui::PopItemWidth();
         }
     }
+
+    /*
+    ImGui::Text("More weapon settings");
+    ImGui::Separator();
+    ImGui::PushItemWidth(100);
+    ImGui::SliderFloat("Tempest speed", &game_data::information::weapon_speeds.disk.bullet_speed, 0, 1E5);
+    ImGui::SliderFloat("Tempest inheritence", &game_data::information::weapon_speeds.disk.inheritence, 0, 1);
+    ImGui::SliderFloat("Chaingun speed", &game_data::information::weapon_speeds.chaingun.bullet_speed, 0, 1E5);
+    ImGui::SliderFloat("Chaingun inheritence", &game_data::information::weapon_speeds.chaingun.inheritence, 0, 1);
+    ImGui::SliderFloat("Grenadelauncher speed", &game_data::information::weapon_speeds.grenadelauncher.bullet_speed, 0, 1E5);
+    ImGui::SliderFloat("Grenadelauncher inheritence", &game_data::information::weapon_speeds.grenadelauncher.inheritence, 0, 1);
+    ImGui::SliderFloat("Plasma speed", &game_data::information::weapon_speeds.plasma.bullet_speed, 0, 1E5);
+    ImGui::SliderFloat("Plasma inheritence", &game_data::information::weapon_speeds.plasma.inheritence, 0, 1);
+    ImGui::SliderFloat("Blaster speed", &game_data::information::weapon_speeds.blaster.bullet_speed, 0, 1E5);
+    ImGui::SliderFloat("Blaster inheritence", &game_data::information::weapon_speeds.blaster.inheritence, 0, 1);
+    ImGui::PopItemWidth();
+    */
 
     /*
 
@@ -1288,6 +1616,140 @@ void DrawAimAssistMenu(void) {
 
 void DrawRoutesMenu(void) {
     return;
+    static Timer routes_file_check_timer(5);
+    int right_child_width = 200;
+
+    ImGui::BeginGroup();
+    ImGui::BeginChild("left_settings##left_settings", ImVec2(ImGui::GetWindowContentRegionWidth() > right_child_width ? ImGui::GetWindowContentRegionWidth() - right_child_width : ImGui::GetWindowContentRegionWidth(), 0));
+
+    ImGui::Text("Settings");
+    ImGui::Separator();
+    ImGui::Checkbox("Enabled##route_enabled", &routes::route_settings.enabled);
+    ImGui::PushItemWidth(100);
+    if (ImGui::SliderInt("Poll rate (Hz)##routes", &routes::route_settings.route_poll_frequency, 1, 300)) {
+        routes::route_draw_poll_timer.SetFrequency(routes::route_settings.route_poll_frequency);
+    }
+    ImGui::Checkbox("Swap team (Mirror)", &routes::route_settings.swap_team);
+    ImGui::PopItemWidth();
+
+    ImGui::Checkbox("Auto pick route closest to spawn", &routes::route_settings.find_route_closest_to_spawn);
+    ImGui::Checkbox("Show route name", &routes::route_settings.show_route_name);
+
+    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(2 * 0.05, 2 * 0.05, 2 * 0.05, 2 * 0.1));
+    ImGui::Separator();
+    ImGui::PopStyleColor();
+
+    ImGui::Text("Routes");
+    ImGui::Separator();
+
+    static vector<UsefulSnippets::Files::FileObject> route_files = UsefulSnippets::Files::getFiles("routes" /*"Basic Routes"*/, ".txt", true);
+
+    static const char* route_filenames[256];
+    static const char* route_paths[256];
+
+    if (routes_file_check_timer.isReady()) {
+        int c = 0;
+        for (vector<UsefulSnippets::Files::FileObject>::iterator i = route_files.begin(); i != route_files.end(); i++) {
+            // cout << "Route found: " << i->getFileName_cstr() << endl;
+            route_filenames[c] = i->getFileName_cstr();
+            route_paths[c] = i->getFilePath_cstr();
+            c++;
+        }
+
+        // routes_file_check_timer.Tick();
+    }
+    static int route_file_index = 0;
+    if (route_file_index > route_files.size() - 1) {
+        route_file_index = 0;
+    }
+
+    ImGui::PushItemWidth(100);
+    if (ImGui::Combo("Route files##routes_load", &route_file_index, route_filenames, route_files.size())) {
+    }
+    ImGui::PopItemWidth();
+
+    if (route_files.size() > 0) {
+        if (ImGui::Button("Load route file##route_load")) {
+            routes::LoadRouteFile(route_paths[route_file_index]);
+        }
+    } else {
+        ImGui::Text("No route files were found.");
+    }
+
+    if (routes::route_file_is_loaded) {
+        ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(2 * 0.05, 2 * 0.05, 2 * 0.05, 2 * 0.1));
+        ImGui::Separator();
+        ImGui::PopStyleColor();
+
+        ImGui::Text("Draw route trail");
+        ImGui::Separator();
+
+        ImGui::PushItemWidth(100);
+        if (ImGui::Combo("Route trails##trail_combo", &routes::loaded_routes.selected_route_trail_index, routes::loaded_routes.route_trail_names, routes::loaded_routes.routeTrails.size())) {
+            //
+        }
+        ImGui::PopItemWidth();
+    } else {
+        ImGui::Text("No route file currently loaded.");
+    }
+
+    ImGui::EndChild();
+    ImGui::EndGroup();
+
+    ImGui::SameLine();
+
+    ImGui::SetCursorPosX({ImGui::GetCursorPos().x + 10});
+    ImGui::BeginGroup();
+    ImGui::BeginChild("right_settings##right_settings", ImVec2(right_child_width, 0));
+
+    ImGui::Text("Marker settings");
+    ImGui::Separator();
+    ImGui::PushItemWidth(100 + 0 * ImGui::GetWindowWidth() * 0.75);
+
+    ImGui::Combo("Style##aim_assist_combo", (int*)&visuals::route_visual_settings.marker_style, visuals::marker_labels, IM_ARRAYSIZE(visuals::marker_labels));
+    ImGui::ColorEdit4("Colour", &visuals::route_visual_settings.marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+    ImGui::Checkbox("Rainbow gradient", &visuals::route_visual_settings.rainbow_gradient);
+    ImGui::SliderInt("Radius", &visuals::route_visual_settings.marker_size, 1, 50);
+
+    if (visuals::route_visual_settings.marker_style == visuals::MarkerStyle::kCircle || visuals::route_visual_settings.marker_style == visuals::MarkerStyle::kSquare) {
+        ImGui::SliderInt("Thickness", &visuals::route_visual_settings.marker_thickness, 1, 10);
+    }
+
+    ImGui::Text("Marker preview");
+
+    ImVec2 window_position = ImGui::GetWindowPos();
+    ImVec2 window_size = ImGui::GetWindowSize();
+
+    ImDrawList* imgui_draw_list = ImGui::GetWindowDrawList();
+    ImVec2 current_cursor_pos = ImGui::GetCursorPos();
+    ImVec2 local_cursor_pos = {window_position.x + ImGui::GetCursorPosX(), window_position.y + ImGui::GetCursorPosY()};
+    imgui_draw_list->AddRectFilled(local_cursor_pos, {local_cursor_pos.x + 100, local_cursor_pos.y + 100}, ImColor(0, 0, 0, 255), 0, 0);
+    ImVec2 center = {local_cursor_pos.x + 100 / 2, local_cursor_pos.y + 100 / 2};
+
+    int marker_style = visuals::route_visual_settings.marker_style;
+    int marker_size = visuals::route_visual_settings.marker_size;
+    int marker_thickness = visuals::route_visual_settings.marker_thickness;
+    ImColor marker_colour = visuals::route_visual_settings.marker_colour;
+
+    switch (visuals::route_visual_settings.marker_style) {
+        case visuals::MarkerStyle::kDot:
+            imgui_draw_list->AddCircleFilled(center, marker_size, marker_colour);
+            break;
+        case visuals::MarkerStyle::kCircle:
+            imgui_draw_list->AddCircle(center, marker_size, marker_colour, 0, marker_thickness);
+            break;
+        case visuals::MarkerStyle::kFilledSquare:
+            imgui_draw_list->AddRectFilled({center.x - marker_size, center.y - marker_size}, {center.x + marker_size, center.y + marker_size}, marker_colour, 0);
+            break;
+        case visuals::MarkerStyle::kSquare:
+            imgui_draw_list->AddRect({center.x - marker_size, center.y - marker_size}, {center.x + marker_size, center.y + marker_size}, marker_colour, 0, 0, marker_thickness);
+            break;
+        default:
+            break;
+    }
+
+    ImGui::EndChild();
+    ImGui::EndGroup();
 }
 
 void DrawRadarMenu(void) {
@@ -1533,22 +1995,85 @@ void DrawCrosshairMenu(void) {
 }
 
 void DrawConfigMenu(void) {
-    return;
+    ImGui::BeginGroup();
+
+    ImGui::BeginChild("config_menu_child##left", ImVec2(ImGui::GetWindowContentRegionWidth() * 0.5, 0));
+
+    static char filename_buffer[256] = "default.cfg";
+
+    ImGui::Text("Save config");
+    ImGui::Separator();
+
+    ImGui::PushItemWidth(100);
+    ImGui::InputText("File name##save_config_file", filename_buffer, 255);
+    ImGui::PopItemWidth();
+    if (ImGui::Button("Save config##save_config_file")) {
+        config::SaveConfig(filename_buffer);
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(2 * 0.05, 2 * 0.05, 2 * 0.05, 2 * 0.1));
+    ImGui::Separator();
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, 20));
+
+    ImGui::Text("Load config");
+    ImGui::Separator();
+    // Combo of existing configs
+
+    vector<UsefulSnippets::Files::FileObject> config_files = UsefulSnippets::Files::getFiles("", ".cfg");
+
+    static const char* config_filenames[256];
+    int c = 0;
+    for (vector<UsefulSnippets::Files::FileObject>::iterator i = config_files.begin(); i != config_files.end(); i++) {
+        config_filenames[c] = i->getFileName_cstr();
+        c++;
+    }
+
+    static int config_index = 0;
+    if (config_index > config_files.size() - 1) {
+        config_index = 0;
+    }
+
+    ImGui::PushItemWidth(100);
+    if (ImGui::Combo("Configs##configs_load", &config_index, config_filenames, config_files.size())) {
+    }
+    ImGui::PopItemWidth();
+
+    if (config_files.size() > 0) {
+        if (ImGui::Button("Load config##_config_load")) {
+            config::LoadConfig(config_filenames[config_index]);
+        }
+    } else {
+        ImGui::Text("No config files were found.");
+    }
+
+    // if (ImGui::Button("Load config")) {
+    //    config::LoadConfig("");
+    //}
+
+    ImGui::EndChild();
+
+    ImGui::EndGroup();
 }
 
 void DrawOtherMenu(void) {
-    return;
+    ImGui::BeginGroup();
+
+    ImGui::BeginChild("othermenu", ImVec2(ImGui::GetWindowContentRegionWidth() * 0.5, 0));
+
+    // ImGui::SliderInt("Crosshair index", &other::other_settings.crosshair_index, 0, 100);
+
+    ImGui::EndChild();
+
+    ImGui::EndGroup();
 }
 
-void DrawSkinChangerMenu(void) {
-    return;
-}
+void DrawSkinChangerMenu(void) {}
 
-void DrawTrainingMenu(void) {
-    return;
-}
+void DrawTrainingMenu(void) {}
 
 }  // namespace imgui_menu
+
 }  // namespace imgui
 
 namespace ue {
@@ -1560,10 +2085,26 @@ PROCESSEVENT_HOOK_FUNCTION(UEHookMain) {
         ue::frame_is_ready = false;
         ATrHUD_eventPostRenderFor_Parms* param = (ATrHUD_eventPostRenderFor_Parms*)p;
         game_data::local_player_controller = (ATrPlayerController*)param->PC;
+        game_data::local_player_character = (Character*)game_data::local_player_controller->Pawn;
+
+        /*
+        math::PrintRotator(game_data::local_player_controller->Rotation, "local_player_controller rotation");
+        if (game_data::local_player_character) {
+            math::PrintRotator(game_data::local_player_character->Rotation, "local_player_character rotation");
+        }
+        */
+
+        /*
+        LOG2("local_player_controller->myHUD", (DWORD)game_data::local_player_controller->myHUD);
+        LOG2("local_player_controller->myHUD->Canvas", (DWORD)game_data::local_player_controller->myHUD->Canvas);
+        if (validate::IsValid(game_data::local_player_character)) {
+            LOG2("local_player_character->GetTrHud()", (DWORD)game_data::local_player_character->GetTrHud());
+        }
+        */
 
         keyManager.checkKeyStates(false);
         game_data::GetGameData();
-        if (game_data::my_player.is_valid_) {
+        if (game_data::my_player.is_valid_ || true) {
             aimbot::Tick();
             esp::Tick();
             radar::Tick();
@@ -1614,13 +2155,17 @@ void HookUnrealEngine(void) {
     Hook32::JumpHook processevent_hook(0x00456F90, (DWORD)hooks::ProcessEventHook);
     UFunction* ufunction = (UFunction*)UObject::FindObject<UFunction>((char*)ue::ufunction_to_hook);
     hooks::AddHook(ufunction, &UEHookMain);
+
+    config::LoadConfig("default.cfg");
+    LOG("Finished hooking Unreal Engine 3 and setting up.");
+
 }
 
 void DrawImGuiInUE(void) {
     using namespace imgui;
 
-    // game_data::screen_size = {ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y};
-    // game_data::screen_center = {game_data::screen_size.X / 2, game_data::screen_size.Y / 2};
+    game_data::screen_size = {ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y};
+    game_data::screen_center = {game_data::screen_size.X / 2, game_data::screen_size.Y / 2};
 
     if (true) {
         if (aimbot::aimbot_settings.enabled) {
@@ -1702,7 +2247,7 @@ void DrawImGuiInUE(void) {
                 colour = (esp_information->is_friendly) ? friendly_box_colour : enemy_box_colour;
                 ImVec2 projection(esp_information->projection.X, esp_information->projection.Y);
                 float box_size_height = esp_information->height;
-                float box_size_width = box_size_height * esp::esp_settings.width_to_height_ratio;
+                float box_size_width = esp_information->width;
 
                 imgui_draw_list->AddRect({projection.x - box_size_width, projection.y - box_size_height}, {projection.x + box_size_width, projection.y + box_size_height}, enemy_box_colour, 0, 0, box_thickness);
 
@@ -1727,11 +2272,8 @@ void DrawImGuiInUE(void) {
 
         if (radar::radar_settings.enabled) {
             ImGui::SetNextWindowPos(visuals::radar_visual_settings.window_location, ImGuiCond_FirstUseEver);
-            // if (config::freshly_loaded_config) {
-            //    ImGui::SetNextWindowPos(visuals::radar_visual_settings.window_location);
-            //} else {
-            //    // ImGui::SetNextWindowPos(visuals::radar_visual_settings.window_location, ImGuiCond_FirstUseEver);
-            //}
+            if (config::freshly_loaded_config)
+                ImGui::SetNextWindowPos(visuals::radar_visual_settings.window_location);
 
             // ImGui::SetNextWindowSize({game_data::screen_size.X, game_data::screen_size.Y});
 
@@ -1919,7 +2461,6 @@ void DrawImGuiInUE(void) {
                 ImGui::PopStyleColor();
             }
             ImGui::End();
-            // ImGui::PopStyleColor();
         }
 
         if (visuals::crosshair_settings.show_or_enabled) {
@@ -1977,7 +2518,7 @@ void DrawImGuiInUE(void) {
         ImGui::SetNextWindowPos({game_data::screen_center.X / 2, game_data::screen_center.Y / 2}, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize({600, 500}, ImGuiCond_FirstUseEver);
 
-        ImGui::Begin("descension v0.4 | MACE 1.9.1.12285", NULL, ImGuiWindowFlags_AlwaysAutoResize & 0);
+        ImGui::Begin("descension (Ported to T:A) v0.1", NULL, ImGuiWindowFlags_AlwaysAutoResize & 0);
 
         ImVec2 window_position = ImGui::GetWindowPos();
         ImVec2 window_size = ImGui::GetWindowSize();

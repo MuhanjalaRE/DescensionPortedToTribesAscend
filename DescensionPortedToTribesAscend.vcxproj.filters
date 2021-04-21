@@ -34,6 +34,12 @@
     <Filter Include="Resource Files\SDK">
       <UniqueIdentifier>{c8e3ac52-f6b8-4922-92a9-f81de15c2deb}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Resource Files\Other\JSON">
+      <UniqueIdentifier>{d9a9b141-aca7-4efb-b0e0-ae36d1f5ce6d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resource Files\Other\Files">
+      <UniqueIdentifier>{0825b91f-a476-4caf-8551-6fb87f207a12}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h">
@@ -81,6 +87,12 @@
     <ClInclude Include="Other\log.h">
       <Filter>Resource Files\Other</Filter>
     </ClInclude>
+    <ClInclude Include="Other\JSON\json.hpp">
+      <Filter>Resource Files\Other\JSON</Filter>
+    </ClInclude>
+    <ClInclude Include="Other\Files\Files.h">
+      <Filter>Resource Files\Other\Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -124,6 +136,9 @@
     </ClCompile>
     <ClCompile Include="imgui\imgui_demo.cpp">
       <Filter>Resource Files\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="Other\Files\Files.cpp">
+      <Filter>Resource Files\Other\Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
