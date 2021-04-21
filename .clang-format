@@ -1,0 +1,5 @@
+# Visual Studio generated .clang-format file
+BasedOnStyle: Chromium
+IndentWidth: 4
+ColumnLimit: 2000
+AllowShortFunctionsOnASingleLine: Empty
