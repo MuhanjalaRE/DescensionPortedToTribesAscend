@@ -96,6 +96,10 @@ static struct AimbotVisualSettings {
     ImColor marker_colour = {255, 255, 0, 200};
     int marker_size_width = 5;
     int marker_size_height = 5;
+
+    bool scale_by_distance = true;
+    int distance_for_scaling = 5000;
+
 } aimbot_visual_settings;
 
 static struct RouteVisualSettings {
@@ -724,7 +728,7 @@ static struct AimbotSettings {
     float aimbot_vertical_fov_angle = 30;
     float aimbot_vertical_fov_angle_sin = 0.5;
     float aimbot_vertical_fov_angle_sin_sqr = 0.25;
-
+    
 } aimbot_settings;
 
 static Timer aimbot_poll_timer(aimbot_settings.aimbot_poll_frequency);
@@ -732,6 +736,13 @@ static Timer aimbot_poll_timer(aimbot_settings.aimbot_poll_frequency);
 static game_data::information::Player target_player;
 
 vector<FVector2D> projections_of_predictions;
+
+struct AimbotInformation {
+    float distance_;
+    FVector2D projection_;
+};
+
+vector<AimbotInformation> aimbot_information;
 
 // ImColor colours[] = {ImColor(0, 113, 188, 175), ImColor(0, 127, 0, 175), ImColor(216, 82, 24, 175), ImColor(0, 0, 255, 175), ImColor(236, 176, 31, 175), ImColor(255, 0, 0, 175), ImColor(125, 46, 141, 175), ImColor(0, 191, 191, 175), ImColor(118, 171, 47, 175), ImColor(191, 0, 191, 175), ImColor(76, 189, 237, 175), ImColor(191, 191, 0, 175), ImColor(161, 19, 46, 175), ImColor(63, 63, 63, 175)};
 ImColor colours[] = {ImColor(255, 0, 0, 255), ImColor(0, 255, 0, 255), ImColor(0, 0, 255, 255)};
@@ -859,6 +870,7 @@ void Tick(void) {
 
     projections_of_predictions.clear();
     projections_of_predictions_coloured.clear();
+    aimbot_information.clear();
 
     if (!game_data::my_player.is_valid_ || game_data::my_player.weapon_ == game_data::Weapon::none || game_data::my_player.weapon_ == game_data::Weapon::unknown)
         return;
@@ -904,6 +916,7 @@ void Tick(void) {
 
                 FVector2D projection = game_functions::Project(prediction);
                 projections_of_predictions.push_back(projection);
+                aimbot_information.push_back({(prediction - game_data::my_player.location_).Magnitude(), projection});
 
                 if (aimbot_settings.auto_aim) {
                     prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight / 2;
@@ -955,6 +968,8 @@ void Tick(void) {
 
                 FVector2D projection = game_functions::Project(prediction);
                 projections_of_predictions.push_back(projection);
+                aimbot_information.push_back({(prediction - game_data::my_player.location_).Magnitude(), projection});
+
                 // math::PrintVector(prediction, "Prediction");
             }
         }
@@ -1285,7 +1300,10 @@ void GetWeapon(void) {
     ATrDevice* weapon = (ATrDevice*)my_player.character_->Weapon;
     if (weapon) {
         game_data::my_player.weapon_ = game_data::Weapon::found;
-        if (weapon->bInstantHit && !weapon->IsA(ATrDevice_ConstantFire::StaticClass())) {
+
+        bool projectile_weapon = weapon->IsA(ATrDevice_ThrowingKnives::StaticClass()) || weapon->IsA(ATrDevice_SN7::StaticClass()) || weapon->IsA(ATrDevice_SN7_MKD::StaticClass());
+
+        if (!projectile_weapon && weapon->bInstantHit && !weapon->IsA(ATrDevice_ConstantFire::StaticClass())) {
             abstraction::my_weapon_object.SetWeaponType(abstraction::WeaponObject::WeaponType::kHitscan);
         } else {
             static abstraction::WeaponObject::WeaponParameters* weapon_parameters = abstraction::my_weapon_object.GetWeaponParameters();
@@ -1643,6 +1661,13 @@ void DrawAimAssistMenu(void) {
         default:
             break;
     }
+
+    current_cursor_pos.y += 100;
+    ImGui::Separator();
+    ImGui::SetCursorPos(current_cursor_pos);
+
+    ImGui::Checkbox("Scale by distance", &visuals::aimbot_visual_settings.scale_by_distance);
+    ImGui::SliderInt("Distance for scaling", &visuals::aimbot_visual_settings.distance_for_scaling, 1, 15000);
 
     ImGui::EndChild();
     ImGui::EndGroup();
@@ -2218,9 +2243,39 @@ void DrawImGuiInUE(void) {
             ImDrawList* imgui_draw_list = ImGui::GetWindowDrawList();
 
             int marker_style = visuals::aimbot_visual_settings.marker_style;
-            int marker_size = visuals::aimbot_visual_settings.marker_size;
+            float marker_size = visuals::aimbot_visual_settings.marker_size;
             int marker_thickness = visuals::aimbot_visual_settings.marker_thickness;
             ImColor marker_colour = visuals::aimbot_visual_settings.marker_colour;
+
+            vector<aimbot::AimbotInformation>& aimbot_informations = aimbot::aimbot_information;
+
+            for (vector<aimbot::AimbotInformation>::iterator i = aimbot_informations.begin(); i != aimbot_informations.end(); i++) {
+                ImVec2 v(i->projection_.X, i->projection_.Y);
+
+                if (visuals::aimbot_visual_settings.scale_by_distance) {
+                    marker_size = (visuals::aimbot_visual_settings.marker_size - 1) * exp(-i->distance_ / visuals::aimbot_visual_settings.distance_for_scaling) + 1;
+                }
+
+                switch (visuals::aimbot_visual_settings.marker_style) {
+                    case visuals::MarkerStyle::kDot:
+                        imgui_draw_list->AddCircleFilled(v, marker_size, marker_colour);
+                        break;
+                    case visuals::MarkerStyle::kCircle:
+                        imgui_draw_list->AddCircle(v, marker_size, marker_colour, 0, marker_thickness);
+                        break;
+                    case visuals::MarkerStyle::kFilledSquare:
+                        imgui_draw_list->AddRectFilled({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, marker_colour, 0);
+                        break;
+                    case visuals::MarkerStyle::kSquare:
+                        imgui_draw_list->AddRect({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, marker_colour, 0, 0, marker_thickness);
+                        break;
+                    default:
+                        break;
+                }
+            }
+
+
+            /*
 
             vector<FVector2D>& projections = aimbot::projections_of_predictions;
 
@@ -2269,6 +2324,8 @@ void DrawImGuiInUE(void) {
                         break;
                 }
             }
+
+            */
 
             // visuals::projections_of_predictions.clear();
             ImGui::End();

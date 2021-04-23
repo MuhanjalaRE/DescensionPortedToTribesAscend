@@ -174,6 +174,7 @@ bool imgui_is_ready = false;
 // ImVec2 resolution;
 
 DWORD present_mid_function_hook_end = NULL;
+void PresentMidFunctionHookFunction(void);
 void PresentMidFunctionHook(void);
 void DoImGuiDrawing(void);
 
@@ -272,7 +273,7 @@ LRESULT WINAPI CustomWindowProcCallback(HWND hWnd, UINT msg, WPARAM wParam, LPAR
     if (imgui_show_menu) {
         io.MouseDrawCursor = true;
         ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
-        // return true;
+        return true; // Comment this line to allow keyboard+mouse input done in the menu to pass through into the actual game
     } else {
         io.MouseDrawCursor = false;
     }
@@ -335,8 +336,8 @@ HRESULT __stdcall EndSceneGetDeviceHook(LPDIRECT3DDEVICE9 device) {
     draw_indexed_primitive_up_vmthook = new VMTHook(game_device, 84, DrawIndexedPrimitiveUPHook);
     set_texture_vmthook = new VMTHook(game_device, 65, SetTextureHook);
 
-#ifdef USE_MID_FUNCTION_PRESENT_HOOK
-    //PrintMemory((void*)VMTHook::GetFunctionFirstInstructionAddress(game_device, 17), 300);
+#ifdef USE_MID_FUNCTION_PRESENT_HOOK_
+    // PrintMemory((void*)VMTHook::GetFunctionFirstInstructionAddress(game_device, 17), 300);
     DWORD present_mid_function_hook_address = VMTHook::GetFunctionFirstInstructionAddress(game_device, 17) + 0x26;
     unsigned int hook_size = 0x2d - 0x26;
     present_mid_function_hook_end = present_mid_function_hook_address + hook_size;
@@ -352,7 +353,11 @@ HRESULT __stdcall EndSceneGetDeviceHook(LPDIRECT3DDEVICE9 device) {
         }
         VirtualProtect((void*)(present_mid_function_hook_address + JumpHook::number_of_bytes_to_overwrite_), hook_size - JumpHook::number_of_bytes_to_overwrite_, protection, &protection);
     }
-    //PrintMemory((void*)VMTHook::GetFunctionFirstInstructionAddress(game_device, 17), 300);
+    // PrintMemory((void*)VMTHook::GetFunctionFirstInstructionAddress(game_device, 17), 300);
+#endif
+
+#ifdef USE_MID_FUNCTION_PRESENT_HOOK
+    MidFunctionHook(VMTHook::GetFunctionFirstInstructionAddress(game_device, 17) + 0x26, (DWORD)PresentMidFunctionHookFunction, 0x2d - 0x26);
 #endif
 
     present_vmthook = new VMTHook(game_device, 17, PresentHook);
@@ -436,17 +441,22 @@ HRESULT __stdcall PresentHook(LPDIRECT3DDEVICE9 device, const RECT* pSourceRect,
     return result;
 }
 
-void PresetMidFunctionHookFunction(void) {
+void PresentMidFunctionHookFunction(void) {
     DoImGuiDrawing();
 }
 
 __declspec(naked) void PresentMidFunctionHook(void) {
     // call something
 
-    PresetMidFunctionHookFunction();
+    __asm {
+        pushad
+    }
+
+    PresentMidFunctionHookFunction();
 
     __asm {
-        // do the instructions overwritten
+        popad
+            // do the instructions overwritten
         test DWORD PTR [esi+0x30],0x2
         mov eax, present_mid_function_hook_end
         jmp eax

@@ -37,4 +37,21 @@ class VMTHook : public Hook32 {
     DWORD GetOriginalFunction(void);
 };
 
+class MidFunctionHook : public Hook32 {
+   public:
+    static const BYTE minimum_number_of_bytes_to_overwrite_ = 5;
+
+   private:
+    void* original_bytes_;
+    void* executeable_buffer_;
+    unsigned int hook_address_;
+    
+
+   public:
+    bool Hook(DWORD source, DWORD destination, unsigned int hook_length);
+    bool UnHook(void);
+    MidFunctionHook(DWORD source, DWORD destination, unsigned int hook_length);
+    //DWORD GetHookAddress(void);
+};
+
 }  // namespace Hook32
