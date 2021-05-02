@@ -20,21 +20,6 @@
 #include "detours.h"
 
 #define USE_MID_FUNCTION_PRESENT_HOOK
-
-#define LOG
-#ifdef LOG
-#define LOG_PRINT(x) std::cout << x << std::endl
-void PrintMemory(void* address, int length) {
-    printf("Reading bytes from %X: ", (DWORD)address);
-    for (int i = 0; i < length; i++) {
-        printf("%02x ", *((char*)address + i) & 0xFF);
-    }
-    printf("\n");
-}
-#else
-#define LOG_PRINT(x) ;
-#endif
-
 #define HWND_WINDOW_NAME "Tribes: Ascend (32-bit, DX9)"
 
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -201,21 +186,21 @@ void Hook(void) {
 #endif
 
     if (CreateDevice()) {
-        LOG_PRINT("Successfully created a LPDIRECT3DDEVICE9 object.");
+        LOG("Successfully created a LPDIRECT3DDEVICE9 object.");
     } else {
-        LOG_PRINT("Failed to create LPDIRECT3DDEVICE9 object.");
+        LOG("Failed to create LPDIRECT3DDEVICE9 object.");
     }
 }
 
 bool CreateDevice(void) {
     LPDIRECT3D9 direct3d9_object = Direct3DCreate9(D3D_SDK_VERSION);
     if (!direct3d9_object) {
-        LOG_PRINT("Attempted to create LPDIRECT3D9 object but Direct3DCreate9 function call failed.");
+        LOG("Attempted to create LPDIRECT3D9 object but Direct3DCreate9 function call failed.");
     }
 
     HWND hwnd = FindWindowA(NULL, HWND_WINDOW_NAME);
     if (!hwnd) {
-        LOG_PRINT("Failed to find hwnd after calling FindWindowA function.");
+        LOG("Failed to find hwnd after calling FindWindowA function.");
     }
 
     game_hwnd = hwnd;
@@ -231,7 +216,7 @@ bool CreateDevice(void) {
     HRESULT result = direct3d9_object->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &d3dpresent_parameters, &new_device);
 
     if (FAILED(result)) {
-        LOG_PRINT("Error creating device after calling CreateDevice function.");
+        LOG("Error creating device after calling CreateDevice function.");
         return false;
     }
 
@@ -242,7 +227,7 @@ bool CreateDevice(void) {
     direct3d9_object->Release();
     new_device->Release();
 
-    LOG_PRINT("Sucessfully created a new DX9 device.");
+    LOG("Sucessfully created a new DX9 device.");
 
     return true;
 }
@@ -320,7 +305,7 @@ void DoImGuiDrawing(void) {
 }
 
 HRESULT __stdcall EndSceneGetDeviceHook(LPDIRECT3DDEVICE9 device) {
-    LOG_PRINT("In EndSceneGetDeviceHook function.");
+    LOG("In EndSceneGetDeviceHook function.");
 
     DWORD original_function_address = end_scene_get_device_jumphook->GetHookAddress();
 
@@ -376,9 +361,9 @@ HRESULT __stdcall EndSceneGetDeviceHook(LPDIRECT3DDEVICE9 device) {
 
     bool load_texture_result = LoadTextureFromFile("crosshair.png", &crosshair);
     if (load_texture_result) {
-        LOG_PRINT("Successfully loaded texture.");
+        LOG("Successfully loaded texture.");
     } else {
-        LOG_PRINT("Failed to load texture.");
+        LOG("Failed to load texture.");
     }
 
     imgui::Setup();
@@ -390,14 +375,14 @@ HRESULT __stdcall EndSceneGetDeviceHook(LPDIRECT3DDEVICE9 device) {
 }
 
 HRESULT __stdcall BeginSceneHook(LPDIRECT3DDEVICE9 device) {
-    // LOG_PRINT("In BeginSceneHook function.");
+    // LOG("In BeginSceneHook function.");
 
     HRESULT result = ((BeginScene)begin_scene_vmthook->GetOriginalFunction())(device);
     return result;
 }
 
 HRESULT __stdcall EndSceneHook(LPDIRECT3DDEVICE9 device) {
-    // LOG_PRINT("In EndSceneHook function.");
+    // LOG("In EndSceneHook function.");
 
 #ifndef USE_MID_FUNCTION_PRESENT_HOOK
     DoImGuiDrawing();
