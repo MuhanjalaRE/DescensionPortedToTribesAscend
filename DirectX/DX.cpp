@@ -19,7 +19,7 @@
 
 #include "detours.h"
 
-#define USE_MID_FUNCTION_PRESENT_HOOK
+#define USE_MID_FUNCTION_PRESENT_HOOK1
 #define HWND_WINDOW_NAME "Tribes: Ascend (32-bit, DX9)"
 
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -34,29 +34,28 @@ void Setup(void);
 
 void Setup(void) {
     ImGuiStyle& style = ImGui::GetStyle();
-
     style.TabRounding = 0.0f;
-    // style.FrameBorderSize = 1.0f;
-    style.FrameBorderSize = 0.0f;
-    // style.ScrollbarRounding = 1.0f;
-    // style.ScrollbarSize = 10.0f;
+    style.FrameBorderSize = 1.0f;
+    style.ScrollbarRounding = 0.0f;
+    style.ScrollbarSize = 10.0f;
     style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
-
-    style.WindowRounding = 0.0f;
-
-    ImVec4* colors = style.Colors;
+    style.CellPadding = ImVec2(6, 3);
+    style.ItemSpacing.y = 8;
+    style.FrameRounding = 2;
+    style.WindowRounding = 8;
+    ImVec4* colors = ImGui::GetStyle().Colors;
     colors[ImGuiCol_Text] = ImVec4(0.95f, 0.95f, 0.95f, 1.00f);
     colors[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
-    colors[ImGuiCol_WindowBg] = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
-    colors[ImGuiCol_ChildBg] = ImVec4(2 * 0.06f, 2 * 0.06f, 2 * 0.06f, 0.0f);
+    colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.12f, 0.92f);  // ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
+    colors[ImGuiCol_ChildBg] = ImVec4(0.04f, 0.04f, 0.04f, 0.50f);
     colors[ImGuiCol_PopupBg] = ImVec4(0.12f, 0.12f, 0.12f, 0.94f);
     colors[ImGuiCol_Border] = ImVec4(0.25f, 0.25f, 0.27f, 0.50f);
     colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
     colors[ImGuiCol_FrameBg] = ImVec4(0.20f, 0.20f, 0.22f, 0.50f);
     colors[ImGuiCol_FrameBgHovered] = ImVec4(0.25f, 0.25f, 0.27f, 0.75f);
     colors[ImGuiCol_FrameBgActive] = ImVec4(0.30f, 0.30f, 0.33f, 1.00f);
-    colors[ImGuiCol_TitleBg] = ImVec4(0.04f, 0.04f, 0.04f, 1.00f);
-    colors[ImGuiCol_TitleBgActive] = ImVec4(0.04f, 0.04f, 0.04f, 1.00f);
+    colors[ImGuiCol_TitleBg] = ImVec4(0.04f, 0.04f, 0.04f, 0.92f);
+    colors[ImGuiCol_TitleBgActive] = ImVec4(0.04f, 0.04f, 0.04f, 0.92f);
     colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.04f, 0.04f, 0.04f, 0.75f);
     colors[ImGuiCol_MenuBarBg] = ImVec4(0.18f, 0.18f, 0.19f, 1.00f);
     colors[ImGuiCol_ScrollbarBg] = ImVec4(0.24f, 0.24f, 0.26f, 0.75f);
@@ -67,7 +66,7 @@ void Setup(void) {
     colors[ImGuiCol_SliderGrab] = ImVec4(0.41f, 0.41f, 0.41f, 0.75f);
     colors[ImGuiCol_SliderGrabActive] = ImVec4(0.62f, 0.62f, 0.62f, 0.75f);
     colors[ImGuiCol_Button] = ImVec4(0.20f, 0.20f, 0.22f, 1.00f);
-    colors[ImGuiCol_ButtonHovered] = ImVec4(0.75f, 0, 0, 255);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.25f, 0.25f, 0.27f, 1.00f);
     colors[ImGuiCol_ButtonActive] = ImVec4(0.41f, 0.41f, 0.41f, 1.00f);
     colors[ImGuiCol_Header] = ImVec4(0.18f, 0.18f, 0.19f, 1.00f);
     colors[ImGuiCol_HeaderHovered] = ImVec4(0.25f, 0.25f, 0.27f, 1.00f);
@@ -258,7 +257,7 @@ LRESULT WINAPI CustomWindowProcCallback(HWND hWnd, UINT msg, WPARAM wParam, LPAR
     if (imgui_show_menu) {
         io.MouseDrawCursor = true;
         ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
-        return true; // Comment this line to allow keyboard+mouse input done in the menu to pass through into the actual game
+        return true;  // Comment this line to allow keyboard+mouse input done in the menu to pass through into the actual game
     } else {
         io.MouseDrawCursor = false;
     }
@@ -267,33 +266,39 @@ LRESULT WINAPI CustomWindowProcCallback(HWND hWnd, UINT msg, WPARAM wParam, LPAR
 }
 
 void DoImGuiDrawing(void) {
+    static ImGuiIO* io = nullptr;
+    if (!io) {
+        io = &ImGui::GetIO();
+    }
+
+    static ImFont* font = NULL;
+    if (!font && io) {
+        ImFontConfig config_;
+        config_.SizePixels = (int)(((ImFont*)io->Fonts->AddFontDefault())->FontSize * 2);
+
+        font = io->Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\Arial.ttf", 16, NULL, io->Fonts->GetGlyphRangesDefault());
+        ImFontConfig config;
+        config.MergeMode = true;
+        config.GlyphMinAdvanceX = 0.0f;  // Use if you want to make the icon monospaced
+        static const ImWchar icon_ranges[] = {0x25A0, 0x25FF, 0};
+        io->Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\L_10646.ttf", 32, &config, icon_ranges);
+        io->Fonts->Build();
+    }
+
     DWORD dwWaitResult = WaitForSingleObject(game_dx_mutex, INFINITE);
 
     ImGui_ImplDX9_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    if (imgui_show_menu && false) {
-        ImGui::Begin("test", NULL);
-        ImGui::Text("Example Text");
-        ImGui::End();
-
-        ImGui::ShowDemoWindow();
+    if (font) {
+        ImGui::PushFont(font);
     }
 
     ue::DrawImGuiInUE();
 
-    if (crosshair) {
-        ImVec2 resolution = ImGui::GetIO().DisplaySize;
-        ImVec2 top_left = {resolution.x / 2 - crosshair->width_ / 2, resolution.y / 2 - crosshair->height_ / 2};
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::SetNextWindowPos(top_left);
-        ImGui::Begin("crosshair_image", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBringToFrontOnFocus);
-        ImGui::Image((void*)crosshair->texture_, ImVec2(crosshair->width_, crosshair->height_));
-        // ImGui::GetWindowDrawList()->AddCircleFilled({resolution.x / 2, resolution.y / 2}, 3, ImColor({0, 255, 0, 255}));
-        ImGui::End();
-        ImGui::PopStyleVar();
+    if (font) {
+        ImGui::PopFont();
     }
 
     ImGui::EndFrame();
@@ -343,13 +348,14 @@ HRESULT __stdcall EndSceneGetDeviceHook(LPDIRECT3DDEVICE9 device) {
 
 #ifdef USE_MID_FUNCTION_PRESENT_HOOK
     MidFunctionHook(VMTHook::GetFunctionFirstInstructionAddress(game_device, 17) + 0x26, (DWORD)PresentMidFunctionHookFunction, 0x2d - 0x26);
-#endif
-
+#else
     present_vmthook = new VMTHook(game_device, 17, PresentHook);
+#endif
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = NULL;
     (void)io;
 
     ImGui_ImplWin32_Init(game_hwnd);
@@ -359,12 +365,14 @@ HRESULT __stdcall EndSceneGetDeviceHook(LPDIRECT3DDEVICE9 device) {
 
     delete end_scene_get_device_jumphook;
 
+    /*
     bool load_texture_result = LoadTextureFromFile("crosshair.png", &crosshair);
     if (load_texture_result) {
         LOG("Successfully loaded texture.");
     } else {
         LOG("Failed to load texture.");
     }
+    */
 
     imgui::Setup();
 

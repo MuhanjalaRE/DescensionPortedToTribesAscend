@@ -85,8 +85,8 @@ static auto vector_getter = [](void* vec, int idx, const char** out_text) {
 };
 
 namespace visuals {
-static enum MarkerStyle { kDot, kCircle, kFilledSquare, kSquare, kFilledRectangle, kRectangle };
-static const char* marker_labels[] = {"Dot", "Circle", "Filled square", "Square"};
+static enum MarkerStyle { kNone, kDot, kCircle, kFilledSquare, kSquare, kBounds, kFilledBounds, kFilledRectangle, kRectangle };
+static const char* marker_labels[] = {"None", "Dot", "Circle", "Filled square", "Square", "Bounds", "Filled bounds"};
 // static const char* marker_labels[] = {"Dot", "Circle", "Filled square", "Square", "Filled rectangle", "Rectangle"};
 
 static struct AimbotVisualSettings {
@@ -99,6 +99,7 @@ static struct AimbotVisualSettings {
 
     bool scale_by_distance = true;
     int distance_for_scaling = 5000;
+    int minimum_marker_size = 3;
 
 } aimbot_visual_settings;
 
@@ -679,6 +680,103 @@ bool IsInHorizontalFieldOfView(FVector enemy_location, double horizontal_fov) {
 
 }  // namespace game_functions
 
+namespace other {
+static struct OtherSettings {
+} other_settings;
+
+void SendLeftMouseClick(void);
+
+void SendLeftMouseClick(void) {
+    INPUT inputs[2];
+    ZeroMemory(inputs, sizeof(inputs));
+
+    inputs[0].type = INPUT_MOUSE;
+    inputs[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+
+    inputs[1].type = INPUT_MOUSE;
+    inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+
+    UINT uSent = SendInput(ARRAYSIZE(inputs), inputs, sizeof(INPUT));
+}
+
+void Tick(void) {
+    if (!game_data::my_player.is_valid_) {
+        game_data::local_player_controller->RequestRespawn();
+        game_data::local_player_controller->Respawn();
+        game_data::local_player_controller->ServerRequestRespawn();
+    }
+}
+
+}  // namespace other
+
+namespace esp {
+
+static struct ESPSettings {
+    bool enabled = true;
+    int poll_frequency = 60;
+    bool show_friendlies = false;
+    int player_height = 100;
+    int player_width = 0;
+    float width_to_height_ratio = 0.5;
+    bool show_lines = false;
+    bool show_names = false;
+
+} esp_settings;
+
+static Timer get_esp_data_timer(esp_settings.poll_frequency);
+
+struct ESPInformation {
+    FVector2D projection;  // center
+    float height;          // height for box/rectangle
+    float width;           // width for box/rectangle
+    bool is_friendly = false;
+    string name;
+};
+
+vector<ESPInformation> esp_information;
+
+void Tick(void) {
+    if (!esp_settings.enabled || !get_esp_data_timer.isReady())
+        return;
+
+    esp_information.clear();
+
+    if (!game_data::my_player.is_valid_)
+        ;  // return;
+
+    // bool is_my_player_alive = game_data::my_player.is_valid_;
+    for (vector<game_data::information::Player>::iterator player = game_data::game_data.players.begin(); player != game_data::game_data.players.end(); player++) {
+        if (!player->is_valid_ || player->character_ == game_data::my_player.character_ || !validate::IsValid(player->character_)) {
+            continue;
+        }
+
+        game_data::information::Player* p = (game_data::information::Player*)&*player;
+        bool same_team = game_data::my_player.IsSameTeam(p);
+        // bool same_team = game_functions::IsSameTeam(game_data::local_player_character, player->character_);
+        // bool line_of_sight = game_functions::InLineOfSight(player->character_);
+
+        if ((same_team && !esp_settings.show_friendlies) || !game_functions::IsInFieldOfView(player->location_))
+            continue;
+
+        if (!game_functions::IsInFieldOfView(player->location_))
+            continue;
+
+        FVector2D center_projection = game_functions::Project(player->location_);
+        player->location_.Z += player->character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
+        FVector2D head_projection = game_functions::Project(player->location_);
+        player->location_.Z -= player->character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
+        float height = abs(head_projection.Y - center_projection.Y);
+
+        string name;
+        if (esp_settings.show_names) {
+            // name = player->player_state_->PlayerName.ToString();
+        }
+
+        esp_information.push_back({center_projection, height, height * (player->character_->CylinderComponent->CollisionRadius / player->character_->CylinderComponent->CollisionHeight), same_team, name});
+    }
+}
+}  // namespace esp
+
 namespace aimbot {
 
 // Overshooting means the weapon bullet speed is too low
@@ -728,7 +826,7 @@ static struct AimbotSettings {
     float aimbot_vertical_fov_angle = 30;
     float aimbot_vertical_fov_angle_sin = 0.5;
     float aimbot_vertical_fov_angle_sin_sqr = 0.25;
-    
+
 } aimbot_settings;
 
 static Timer aimbot_poll_timer(aimbot_settings.aimbot_poll_frequency);
@@ -740,6 +838,8 @@ vector<FVector2D> projections_of_predictions;
 struct AimbotInformation {
     float distance_;
     FVector2D projection_;
+    float height;
+    float width;
 };
 
 vector<AimbotInformation> aimbot_information;
@@ -862,6 +962,8 @@ static float z_velocity_scalar = 0;   // 5? 0.01
 static bool use_muzzle_location = true;
 static float muzzle_scalar = 1;
 
+static int fire_mode = 0;
+
 void Tick(void) {
     if (!aimbot_settings.enabled /*|| !enabled*/ || !aimbot_poll_timer.isReady())
         return;
@@ -890,6 +992,7 @@ void Tick(void) {
     }
 
     if (!aimbot_settings.target_everyone) {
+        bool triggerbot_success = false;
         if (enabled && FindTarget() /*&& target_player.character_*/) {
             player_world_object.SetLocation(target_player.location_);
             player_world_object.SetVelocity(target_player.velocity_);
@@ -907,26 +1010,69 @@ void Tick(void) {
                     if (hitActor) {
                         prediction = hit_location;
                         if (target_player.location_.Z < hit_location.Z) {
-                            prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight / 2;
+                            prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight;
                         } else {
-                            prediction.Z += target_player.character_->CylinderComponent->CollisionHeight / 2;
+                            prediction.Z += target_player.character_->CylinderComponent->CollisionHeight;
                         }
                     }
                 }
 
                 FVector2D projection = game_functions::Project(prediction);
-                projections_of_predictions.push_back(projection);
-                aimbot_information.push_back({(prediction - game_data::my_player.location_).Magnitude(), projection});
+                float height = -1;
+                float width = -1;
+
+                if (aimbot_settings.use_triggerbot) {
+                    if (projection.X > 0 && projection.Y > 0) {
+                        bool los = game_functions::InLineOfSight(target_player.character_);
+                        if (los) {
+                            FVector2D center_projection = game_functions::Project(target_player.location_);
+                            target_player.location_.Z += target_player.character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
+                            FVector2D head_projection = game_functions::Project(target_player.location_);
+                            target_player.location_.Z -= target_player.character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
+                            height = abs(head_projection.Y - center_projection.Y);
+                            width = height * (target_player.character_->CylinderComponent->CollisionRadius / target_player.character_->CylinderComponent->CollisionHeight);
+
+                            if (abs(game_data::screen_center.X - projection.X) < width && abs(game_data::screen_center.Y - projection.Y) < height) {
+                                if (game_data::my_player.weapon_ == game_data::Weapon::found) {
+                                    // other::SendLeftMouseClick();
+                                    game_data::my_player.character_->Weapon->StartFire(fire_mode);
+                                    triggerbot_success = true;
+                                }
+                            }
+                        }
+                    }
+                    // if (!success)
+                    //    game_data::my_player.character_->Weapon->StopFire(fire_mode);
+                }
+
+                if ((imgui::visuals::aimbot_visual_settings.marker_style == imgui::visuals::MarkerStyle::kBounds || imgui::visuals::aimbot_visual_settings.marker_style == imgui::visuals::MarkerStyle::kFilledBounds) && height == -1) {
+                    FVector2D center_projection = game_functions::Project(target_player.location_);
+                    target_player.location_.Z += target_player.character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
+                    FVector2D head_projection = game_functions::Project(target_player.location_);
+                    target_player.location_.Z -= target_player.character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
+                    height = abs(head_projection.Y - center_projection.Y);
+                    width = height * (target_player.character_->CylinderComponent->CollisionRadius / target_player.character_->CylinderComponent->CollisionHeight);
+                }
+
+                if (projection.Y >= 0) {
+                    projections_of_predictions.push_back(projection);
+                    aimbot_information.push_back({(prediction - game_data::my_player.location_).Magnitude(), projection, height, width});
+                }
 
                 if (aimbot_settings.auto_aim) {
-                    prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight / 2;
+                    prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight;
                     FRotator aim_rotator = math::VectorToRotator(prediction - game_data::my_player.location_);
                     FRotator& aim_rotator_reference = aim_rotator;
                     game_data::local_player_controller->SetRotation(aim_rotator_reference);
                 }
             }
+        } else {
+            if (aimbot_settings.use_triggerbot && !triggerbot_success) {
+                game_data::local_player_controller->StopFire(fire_mode);
+            }
         }
     } else {
+        bool triggerbot_success = false;
         for (vector<game_data::information::Player>::iterator player = game_data::game_data.players.begin(); player != game_data::game_data.players.end(); player++) {
             if (!player->is_valid_ || player->character_ == game_data::my_player.character_) {
                 continue;
@@ -959,92 +1105,64 @@ void Tick(void) {
                     if (hitActor) {
                         prediction = hit_location;
                         if (player->location_.Z < hit_location.Z) {
-                            prediction.Z -= player->character_->CylinderComponent->CollisionHeight / 2;
+                            prediction.Z -= player->character_->CylinderComponent->CollisionHeight;
                         } else {
-                            prediction.Z += player->character_->CylinderComponent->CollisionHeight / 2;
+                            prediction.Z += player->character_->CylinderComponent->CollisionHeight;
                         }
                     }
                 }
 
                 FVector2D projection = game_functions::Project(prediction);
-                projections_of_predictions.push_back(projection);
-                aimbot_information.push_back({(prediction - game_data::my_player.location_).Magnitude(), projection});
+                float height = -1;
+                float width = -1;
+
+                if (aimbot_settings.use_triggerbot) {
+                    if (projection.X > 0 && projection.Y > 0) {
+                        bool los = game_functions::InLineOfSight(player->character_);
+                        if (los) {
+                            FVector2D center_projection = game_functions::Project(player->location_);
+                            player->location_.Z += player->character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
+                            FVector2D head_projection = game_functions::Project(player->location_);
+                            player->location_.Z -= player->character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
+                            height = abs(head_projection.Y - center_projection.Y);
+                            width = height * (player->character_->CylinderComponent->CollisionRadius / player->character_->CylinderComponent->CollisionHeight);
+
+                            if (abs(game_data::screen_center.X - projection.X) < width && abs(game_data::screen_center.Y - projection.Y) < height) {
+                                if (game_data::my_player.weapon_ == game_data::Weapon::found) {
+                                    // other::SendLeftMouseClick();
+                                    game_data::my_player.character_->Weapon->StartFire(fire_mode);
+                                    triggerbot_success = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if ((imgui::visuals::aimbot_visual_settings.marker_style == imgui::visuals::MarkerStyle::kBounds || imgui::visuals::aimbot_visual_settings.marker_style == imgui::visuals::MarkerStyle::kFilledBounds) && height == -1) {
+                    FVector2D center_projection = game_functions::Project(player->location_);
+                    player->location_.Z += player->character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
+                    FVector2D head_projection = game_functions::Project(player->location_);
+                    player->location_.Z -= player->character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
+                    height = abs(head_projection.Y - center_projection.Y);
+                    width = height * (player->character_->CylinderComponent->CollisionRadius / player->character_->CylinderComponent->CollisionHeight);
+                }
+
+                if (projection.Y >= 0) {
+                    projections_of_predictions.push_back(projection);
+                    aimbot_information.push_back({(prediction - game_data::my_player.location_).Magnitude(), projection, height, width});
+                }
 
                 // math::PrintVector(prediction, "Prediction");
             }
+        }
+
+        if (aimbot_settings.use_triggerbot && !triggerbot_success) {
+            game_data::local_player_controller->StopFire(fire_mode);
         }
     }
 }
 
 }  // namespace aimbot
-
-namespace esp {
-
-static struct ESPSettings {
-    bool enabled = true;
-    int poll_frequency = 60;
-    bool show_friendlies = false;
-    int player_height = 100;
-    int player_width = 0;
-    float width_to_height_ratio = 0.5;
-    bool show_lines = false;
-    bool show_names = false;
-
-} esp_settings;
-
-static Timer get_esp_data_timer(esp_settings.poll_frequency);
-
-struct ESPInformation {
-    FVector2D projection;  // center
-    float height;          // height for box/rectangle
-    float width;           // width for box/rectangle
-    bool is_friendly = false;
-    string name;
-};
-
-vector<ESPInformation> esp_information;
-
-void Tick(void) {
-    if (!esp_settings.enabled || !get_esp_data_timer.isReady())
-        return;
-
-    esp_information.clear();
-
-    if (!game_data::my_player.is_valid_)
-        ;  // return;
-
-    // bool is_my_player_alive = game_data::my_player.is_valid_;
-    for (vector<game_data::information::Player>::iterator player = game_data::game_data.players.begin(); player != game_data::game_data.players.end(); player++) {
-        if (!player->is_valid_ || player->character_ == game_data::my_player.character_ || !validate::IsValid(player->character_)) {
-            continue;
-        }
-
-        game_data::information::Player* p = (game_data::information::Player*)&*player;
-        bool same_team = game_data::my_player.IsSameTeam(p);
-        // bool same_team = game_functions::IsSameTeam(game_data::local_player_character, player->character_);
-        // bool line_of_sight = game_functions::InLineOfSight(player->character_);
-
-        if ((same_team && !esp_settings.show_friendlies) || !game_functions::IsInFieldOfView(player->location_))
-            continue;
-
-        if (!game_functions::IsInFieldOfView(player->location_))
-            continue;
-
-        FVector2D center_projection = game_functions::Project(player->location_);
-        player->location_.Z += player->character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
-        FVector2D head_projection = game_functions::Project(player->location_);
-        player->location_.Z -= player->character_->CylinderComponent->CollisionHeight;  // this is HALF the height in reality
-        float height = abs(head_projection.Y - center_projection.Y);
-
-        string name;
-        if (esp_settings.show_names) {
-            // name = player->player_state_->PlayerName.ToString();
-        }
-
-        esp_information.push_back({center_projection, height, height * (player->character_->CylinderComponent->CollisionRadius / player->character_->CylinderComponent->CollisionHeight), same_team, name});
-    }
-}
-}  // namespace esp
 
 namespace routes {
 struct RouteSettings {
@@ -1339,9 +1457,6 @@ void GetWeapon(void) {
 }
 }  // namespace game_data
 
-namespace other {
-static struct OtherSettings { } other_settings; }  // namespace other
-
 namespace config {
 
 static bool freshly_loaded_config = false;
@@ -1449,228 +1564,174 @@ bool LoadConfig(const char* filename) {
 
 namespace imgui {
 namespace imgui_menu {
-enum LeftMenuButtons { kAimAssist, kAimbot, kESP, kRadar, kOther, kAimTracker, kRoutes, kOptions, kCrosshair, kSkinChanger, kConfigs, kCredits, kLua, kBindings, kPID, kTraining };
-static const char* button_text[] = {"Aim assist", "-", "ESP", "Radar", "-", "-", "-", "-", "Crosshair", "-", "Configs", "-", "-", "-", "-", "-"};
+enum LeftMenuButtons { kAimAssist, kAimbot, kESP, kRadar, kOther, kAimTracker, kRoutes, kOptions, kCrosshair, kSkinChanger, kConfigs, kCredits, kLua, kBindings, kPID, kTraining, kInformation };
+static const char* button_text[] = {"Aim assist", "-", "ESP", "Radar", "Other", "-", "-", "-", "-", "-", "Configs", "-", "-", "-", "-", "-", "Information"};
 // static const char* button_text[] = {"-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "Scripting", "-", "-"};
 static const int buttons_num = sizeof(button_text) / sizeof(char*);
-static int selected_index = LeftMenuButtons::kAimAssist;
+static int selected_index = LeftMenuButtons::kInformation;  // LeftMenuButtons::kAimAssist;
+static float item_width = -150;
 
 void DrawAimAssistMenu(void) {
-    // static int marker_style = visuals::aimbot_visual_settings.marker_style;
-    // static int marker_size = visuals::aimbot_visual_settings.marker_size;
-    // static int marker_thickness = visuals::aimbot_visual_settings.marker_thickness;
-    // static ImColor marker_colour = visuals::aimbot_visual_settings.marker_colour;
+    static ImGuiTableFlags flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Resizable | (ImGuiTableFlags_ContextMenuInBody & 0) | (ImGuiTableFlags_NoBordersInBody & 0) | ImGuiTableFlags_BordersOuter;
+    if (ImGui::BeginTable("aimassisttable", 1, flags, ImVec2(0, ImGui::GetContentRegionAvail().y))) {
+        ImGui::TableSetupColumn("Aim assist", ImGuiTableColumnFlags_WidthStretch);
+        // ImGui::TableSetupColumn("Visuals", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableHeadersRow();
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::PushItemWidth(item_width);
+        if (ImGui::CollapsingHeader("General settings")) {
+            ImGui::Indent();
 
-    int right_child_width = 200;
+            // ImGui::SliderInt("FireMode", &aimbot::fire_mode, 0, 255);
 
-    ImGui::BeginGroup();
-    ImGui::BeginChild("left_settings##left_settings", ImVec2(ImGui::GetWindowContentRegionWidth() > right_child_width ? ImGui::GetWindowContentRegionWidth() - right_child_width : ImGui::GetWindowContentRegionWidth(), 0));
+            ImGui::Checkbox("Enable aim assist", &aimbot::aimbot_settings.enabled);
+            // ImGui::PushItemWidth(item_width * 2);
+            ImGui::Combo("Mode##aim_assist_mode_combo", (int*)&aimbot::aimbot_settings.aimbot_mode, aimbot::mode_labels, IM_ARRAYSIZE(aimbot::mode_labels));
+            // ImGui::PopItemWidth();
 
-    ImGui::Text("Aimbot Settings");
-    // ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.75f, 0, 0, 255));
-    ImGui::Separator();
-    // ImGui::PopStyleColor();
+            if (aimbot::aimbot_settings.aimbot_mode == aimbot::AimbotMode::kClosestXhair) {
+                ImGui::SliderFloat("Horizontal FOV", &aimbot::aimbot_settings.aimbot_horizontal_fov_angle, 1, 89);
+                aimbot::aimbot_settings.aimbot_horizontal_fov_angle_cos = cos(aimbot::aimbot_settings.aimbot_horizontal_fov_angle * PI / 180.0);
+                aimbot::aimbot_settings.aimbot_horizontal_fov_angle_cos_sqr = pow(aimbot::aimbot_settings.aimbot_horizontal_fov_angle_cos, 2);
+            }
 
-    if (ImGui::Checkbox("Enable aim assist", &aimbot::aimbot_settings.enabled)) {
-    }
+            if (ImGui::SliderInt("Poll rate (Hz)", &aimbot::aimbot_settings.aimbot_poll_frequency, 1, 300)) {
+                aimbot::aimbot_poll_timer.SetFrequency(aimbot::aimbot_settings.aimbot_poll_frequency);
+            }
 
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Enable aim assist. This draw predictions on the screen.");
-    }
+            ImGui::Checkbox("Use trigger bot (Explosives only)", &aimbot::aimbot_settings.use_triggerbot);
 
-    ImGui::PushItemWidth(100);
-    ImGui::Combo("Mode##aim_assist_mode_combo", (int*)&aimbot::aimbot_settings.aimbot_mode, aimbot::mode_labels, IM_ARRAYSIZE(aimbot::mode_labels));
-    ImGui::PopItemWidth();
+            ImGui::Checkbox("Use custom ping value", &aimbot::aimbot_settings.use_custom_ping);
 
-    if (aimbot::aimbot_settings.aimbot_mode == aimbot::AimbotMode::kClosestXhair) {
-        ImGui::PushItemWidth(100);
-        ImGui::SliderFloat("Horizontal FOV", &aimbot::aimbot_settings.aimbot_horizontal_fov_angle, 1, 90);
-        ImGui::PopItemWidth();
-        aimbot::aimbot_settings.aimbot_horizontal_fov_angle_cos = cos(aimbot::aimbot_settings.aimbot_horizontal_fov_angle * PI / 180.0);
-        aimbot::aimbot_settings.aimbot_horizontal_fov_angle_cos_sqr = pow(aimbot::aimbot_settings.aimbot_horizontal_fov_angle_cos, 2);
-    }
+            if (aimbot::aimbot_settings.use_custom_ping) {
+                ImGui::SliderFloat("Custom projectile ping", &aimbot::aimbot_settings.ping_in_ms, -300, 300);
+                ImGui::PopItemWidth();
+            }
 
-    if (!aimbot::aimbot_settings.target_everyone) {
-        ImGui::Checkbox("Stay locked on to target", &aimbot::aimbot_settings.stay_locked_to_target);
-        ImGui::Checkbox("Auto lock to new target", &aimbot::aimbot_settings.auto_lock_to_new_target);
-    }
-
-    ImGui::PushItemWidth(100);
-    if (ImGui::SliderInt("Poll rate (Hz)", &aimbot::aimbot_settings.aimbot_poll_frequency, 1, 300)) {
-        aimbot::aimbot_poll_timer.SetFrequency(aimbot::aimbot_settings.aimbot_poll_frequency);
-    }
-    ImGui::PopItemWidth();
-
-    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(2 * 0.05, 2 * 0.05, 2 * 0.05, 2 * 0.1));
-    ImGui::Separator();
-    ImGui::PopStyleColor();
-
-    ImGui::Text("Weapon settings");
-    // ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.75f, 0, 0, 255));
-    ImGui::Separator();
-    // ImGui::PopStyleColor();
-
-    ImGui::Checkbox("Use custom ping value", &aimbot::aimbot_settings.use_custom_ping);
-
-    if (aimbot::aimbot_settings.use_custom_ping) {
-        // ImGui::Checkbox("Use inheritance", &game_data::my_player_object.GetWeapon()->GetAimbotParameters()->use_inheritance);
-        ImGui::PushItemWidth(100 + 0 * ImGui::GetWindowWidth() * 0.75);
-        ImGui::SliderFloat("Custom ping", &aimbot::aimbot_settings.ping_in_ms, -300, 300);
-        /*
-        ImGui::SliderFloat("Tempest ping", &aimbot::aimbot_settings.tempest_ping_in_ms, -300, 300);
-        ImGui::SliderFloat("Chain gun ping", &aimbot::aimbot_settings.chaingun_ping_in_ms, -300, 300);
-        ImGui::SliderFloat("Grenade launcher ping", &aimbot::aimbot_settings.grenadelauncher_ping_in_ms, -300, 300);
-        ImGui::SliderFloat("Plasma gun ping", &aimbot::aimbot_settings.plasmagun_ping_in_ms, -300, 300);
-        ImGui::SliderFloat("Blaster ping", &aimbot::aimbot_settings.blaster_ping_in_ms, -300, 300);
-        ImGui::SliderFloat("Self compensation ping", &aimbot::aimbot_settings.self_compensation_time_in_ms, -300, 300);
-        // ImGui::SliderFloat("Tempest ping", &aimbot::aimbot_settings.tempest_ping_in_ms, -200, 200);
-        */
-        ImGui::PopItemWidth();
-    }
-
-    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(2 * 0.05, 2 * 0.05, 2 * 0.05, 2 * 0.1));
-    ImGui::Separator();
-    ImGui::PopStyleColor();
-
-    ImGui::Text("Target settings");
-    ImGui::Separator();
-    ImGui::Checkbox("Friendly fire", &aimbot::aimbot_settings.friendly_fire);
-    ImGui::Checkbox("Target everyone", &aimbot::aimbot_settings.target_everyone);
-    ImGui::Checkbox("Need line of sight", &aimbot::aimbot_settings.need_line_of_sight);
-
-    /*
-
-    ImGui::Separator();
-    ImGui::Checkbox("Triggerbot", &aimbot::aimbot_settings.use_triggerbot);
-    ImGui::PushItemWidth(100 + 0 * ImGui::GetWindowWidth() * 0.75);
-    ImGui::SliderFloat("Triggerbot pixel radius", &aimbot::aimbot_settings.triggerbot_pixel_radius, 1, game_data::screen_center.X);
-    ImGui::PopItemWidth();
-
-    ImGui::Separator();
-    ImGui::Checkbox("Auto aim", &aimbot::aimbot_settings.auto_aim);
-
-    ImGui::Separator();
-    ImGui::PushItemWidth(100 + 0 * ImGui::GetWindowWidth() * 0.75);
-    ImGui::SliderFloat("Aimbot offset X", &aimbot::aimbot_settings.aimbot_offset.X, -300, 300);
-    ImGui::SliderFloat("Aimbot offset Y", &aimbot::aimbot_settings.aimbot_offset.Y, -300, 300);
-    ImGui::SliderFloat("Aimbot offset Z", &aimbot::aimbot_settings.aimbot_offset.Z, -300, 300);
-    ImGui::PopItemWidth();
-
-    ImGui::Separator();
-    ImGui::Checkbox("Use weighting", &aimbot::aimbot_settings.use_weighting);
-    ImGui::PushItemWidth(100 + 0 * ImGui::GetWindowWidth() * 0.75);
-    ImGui::SliderInt("Client weight", &aimbot::aimbot_settings.client_weight, 0, 10);
-    ImGui::SliderInt("Prediction weight", &aimbot::aimbot_settings.prediction_weight, 0, 10);
-    */
-
-    if (!aimbot::aimbot_settings.target_everyone) {
-        ImGui::Separator();
-        ImGui::Checkbox("Auto aim", &aimbot::aimbot_settings.auto_aim);
-
-        if (aimbot::aimbot_settings.auto_aim && false) {
-            ImGui::PushItemWidth(100);
-            ImGui::SliderFloat("Aimbot offset X", &aimbot::aimbot_settings.aimbot_offset.X, -300, 300);
-            ImGui::SliderFloat("Aimbot offset Y", &aimbot::aimbot_settings.aimbot_offset.Y, -300, 300);
-            ImGui::SliderFloat("Aimbot offset Z", &aimbot::aimbot_settings.aimbot_offset.Z, -300, 300);
-            ImGui::PopItemWidth();
+            ImGui::Unindent();
         }
+
+        if (ImGui::CollapsingHeader("Target settings")) {
+            ImGui::Indent();
+            ImGui::Checkbox("Friendly fire", &aimbot::aimbot_settings.friendly_fire);
+            ImGui::Checkbox("Need line of sight", &aimbot::aimbot_settings.need_line_of_sight);
+            ImGui::Checkbox("Target everyone", &aimbot::aimbot_settings.target_everyone);
+            if (!aimbot::aimbot_settings.target_everyone) {
+                ImGui::Checkbox("Stay locked on to target", &aimbot::aimbot_settings.stay_locked_to_target);
+                ImGui::Checkbox("Auto lock to new target", &aimbot::aimbot_settings.auto_lock_to_new_target);
+                ImGui::Checkbox("Auto aim", &aimbot::aimbot_settings.auto_aim);
+            }
+            ImGui::Unindent();
+        }
+
+        /*
+        if (ImGui::CollapsingHeader("Weapon settings")) {
+            ImGui::Indent();
+            if (ImGui::CollapsingHeader("Pings")) {
+                ImGui::Indent();
+                ImGui::SliderFloat("Tempest ping", &aimbot::aimbot_settings.tempest_ping_in_ms, -300, 300);
+                ImGui::SliderFloat("Chaingun ping", &aimbot::aimbot_settings.chaingun_ping_in_ms, -300, 300);
+                ImGui::SliderFloat("Grenade Launcher ping", &aimbot::aimbot_settings.grenadelauncher_ping_in_ms, -300, 300);
+                ImGui::SliderFloat("Plasma Gun ping", &aimbot::aimbot_settings.plasmagun_ping_in_ms, -300, 300);
+                ImGui::SliderFloat("Blaster ping", &aimbot::aimbot_settings.blaster_ping_in_ms, -300, 300);
+                // ImGui::SliderFloat("Self compensation ping", &aimbot::aimbot_settings.self_compensation_time_in_ms, -300, 300);
+                ImGui::Unindent();
+            }
+
+            if (ImGui::CollapsingHeader("Bullet speeds")) {
+                ImGui::Indent();
+                ImGui::SliderFloat("Tempest speed", &game_data::information::weapon_speeds.disk.bullet_speed, 0, 1E5);
+                ImGui::SliderFloat("Chaingun speed", &game_data::information::weapon_speeds.chaingun.bullet_speed, 0, 1E5);
+                ImGui::SliderFloat("Grenadelauncher speed", &game_data::information::weapon_speeds.grenadelauncher.bullet_speed, 0, 1E5);
+                ImGui::SliderFloat("Plasma speed", &game_data::information::weapon_speeds.plasma.bullet_speed, 0, 1E5);
+                ImGui::SliderFloat("Blaster speed", &game_data::information::weapon_speeds.blaster.bullet_speed, 0, 1E5);
+                ImGui::Unindent();
+            }
+
+            if (ImGui::CollapsingHeader("Inheritence")) {
+                ImGui::Indent();
+                ImGui::SliderFloat("Tempest inheritence", &game_data::information::weapon_speeds.disk.inheritence, 0, 1);
+                ImGui::SliderFloat("Chaingun inheritence", &game_data::information::weapon_speeds.chaingun.inheritence, 0, 1);
+                ImGui::SliderFloat("Grenadelauncher inheritence", &game_data::information::weapon_speeds.grenadelauncher.inheritence, 0, 1);
+                ImGui::SliderFloat("Plasma inheritence", &game_data::information::weapon_speeds.plasma.inheritence, 0, 1);
+                ImGui::SliderFloat("Blaster inheritence", &game_data::information::weapon_speeds.blaster.inheritence, 0, 1);
+                ImGui::Unindent();
+            }
+
+            ImGui::Unindent();
+        }
+        */
+
+        if (ImGui::CollapsingHeader("Markers")) {
+            // ImGui::TableSetColumnIndex(1);
+            // ImGui::PushItemWidth(item_width);
+            float marker_preview_size = 100;
+            ImGui::Combo("Style##aim_assist_combo", (int*)&visuals::aimbot_visual_settings.marker_style, visuals::marker_labels, IM_ARRAYSIZE(visuals::marker_labels));
+            ImGui::ColorEdit4("Colour", &visuals::aimbot_visual_settings.marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+
+            if (visuals::aimbot_visual_settings.marker_style != visuals::MarkerStyle::kBounds && visuals::aimbot_visual_settings.marker_style != visuals::MarkerStyle::kFilledBounds)
+                ImGui::SliderInt("Radius", &visuals::aimbot_visual_settings.marker_size, 1, 10);
+
+            if (visuals::aimbot_visual_settings.marker_style == visuals::MarkerStyle::kCircle || visuals::aimbot_visual_settings.marker_style == visuals::MarkerStyle::kSquare || visuals::aimbot_visual_settings.marker_style == visuals::MarkerStyle::kBounds) {
+                ImGui::SliderInt("Thickness", &visuals::aimbot_visual_settings.marker_thickness, 1, 10);
+            }
+
+            ImGui::Text("Marker preview");
+
+            ImVec2 window_position = ImGui::GetWindowPos();
+            ImVec2 window_size = ImGui::GetWindowSize();
+
+            ImDrawList* imgui_draw_list = ImGui::GetWindowDrawList();
+            ImVec2 current_cursor_pos = ImGui::GetCursorPos();
+            ImVec2 local_cursor_pos = {window_position.x + ImGui::GetCursorPosX(), window_position.y + ImGui::GetCursorPosY() - ImGui::GetScrollY()};
+            imgui_draw_list->AddRectFilled(local_cursor_pos, {local_cursor_pos.x + marker_preview_size, local_cursor_pos.y + marker_preview_size}, ImColor(0, 0, 0, 255), 0, 0);
+            ImVec2 center = {local_cursor_pos.x + marker_preview_size / 2, local_cursor_pos.y + marker_preview_size / 2};
+
+            int marker_style = visuals::aimbot_visual_settings.marker_style;
+            int marker_size = visuals::aimbot_visual_settings.marker_size;
+            int marker_thickness = visuals::aimbot_visual_settings.marker_thickness;
+            ImColor marker_colour = visuals::aimbot_visual_settings.marker_colour;
+
+            float box_size_height = 40;
+            float box_size_width = box_size_height * esp::esp_settings.width_to_height_ratio;
+
+            switch (visuals::aimbot_visual_settings.marker_style) {
+                case visuals::MarkerStyle::kDot:
+                    imgui_draw_list->AddCircleFilled(center, marker_size, marker_colour);
+                    break;
+                case visuals::MarkerStyle::kCircle:
+                    imgui_draw_list->AddCircle(center, marker_size, marker_colour, 0, marker_thickness);
+                    break;
+                case visuals::MarkerStyle::kFilledSquare:
+                    imgui_draw_list->AddRectFilled({center.x - marker_size, center.y - marker_size}, {center.x + marker_size, center.y + marker_size}, marker_colour, 0);
+                    break;
+                case visuals::MarkerStyle::kSquare:
+                    imgui_draw_list->AddRect({center.x - marker_size, center.y - marker_size}, {center.x + marker_size, center.y + marker_size}, marker_colour, 0, 0, marker_thickness);
+                    break;
+                case visuals::MarkerStyle::kBounds:
+                    imgui_draw_list->AddRect({center.x - box_size_width, center.y - box_size_height}, {center.x + box_size_width, center.y + box_size_height}, marker_colour, 0, 0, marker_thickness);
+                    break;
+                case visuals::MarkerStyle::kFilledBounds:
+                    imgui_draw_list->AddRectFilled({center.x - box_size_width, center.y - box_size_height}, {center.x + box_size_width, center.y + box_size_height}, marker_colour, 0);
+                    break;
+                default:
+                    break;
+            }
+
+            current_cursor_pos.y += marker_preview_size;
+            ImGui::SetCursorPos(current_cursor_pos);
+            if (visuals::aimbot_visual_settings.marker_style != visuals::MarkerStyle::kBounds && visuals::aimbot_visual_settings.marker_style != visuals::MarkerStyle::kFilledBounds) {
+                ImGui::Spacing();
+                ImGui::Checkbox("Scale by distance", &visuals::aimbot_visual_settings.scale_by_distance);
+                if (visuals::aimbot_visual_settings.scale_by_distance) {
+                    ImGui::SliderInt("Distance for scaling", &visuals::aimbot_visual_settings.distance_for_scaling, 1, 15000);
+                    ImGui::SliderInt("Minimum marker size", &visuals::aimbot_visual_settings.minimum_marker_size, 1, 10);
+                }
+            }
+        }
+        ImGui::EndTable();
     }
-
-    /*
-    ImGui::Text("More weapon settings");
-    ImGui::Separator();
-    ImGui::PushItemWidth(100);
-    ImGui::SliderFloat("Tempest speed", &game_data::information::weapon_speeds.disk.bullet_speed, 0, 1E5);
-    ImGui::SliderFloat("Tempest inheritence", &game_data::information::weapon_speeds.disk.inheritence, 0, 1);
-    ImGui::SliderFloat("Chaingun speed", &game_data::information::weapon_speeds.chaingun.bullet_speed, 0, 1E5);
-    ImGui::SliderFloat("Chaingun inheritence", &game_data::information::weapon_speeds.chaingun.inheritence, 0, 1);
-    ImGui::SliderFloat("Grenadelauncher speed", &game_data::information::weapon_speeds.grenadelauncher.bullet_speed, 0, 1E5);
-    ImGui::SliderFloat("Grenadelauncher inheritence", &game_data::information::weapon_speeds.grenadelauncher.inheritence, 0, 1);
-    ImGui::SliderFloat("Plasma speed", &game_data::information::weapon_speeds.plasma.bullet_speed, 0, 1E5);
-    ImGui::SliderFloat("Plasma inheritence", &game_data::information::weapon_speeds.plasma.inheritence, 0, 1);
-    ImGui::SliderFloat("Blaster speed", &game_data::information::weapon_speeds.blaster.bullet_speed, 0, 1E5);
-    ImGui::SliderFloat("Blaster inheritence", &game_data::information::weapon_speeds.blaster.inheritence, 0, 1);
-    ImGui::PopItemWidth();
-    */
-
-    /*
-
-    ImGui::Text("Experimental shit");
-    ImGui::Separator();
-    ImGui::PushItemWidth(100);
-    ImGui::SliderFloat("XY unit velocity scalar (tempest)", &aimbot::xy_velocity_scalar, -100, 100);
-    ImGui::SliderFloat("Z velocity scalar (tempest)", &aimbot::z_velocity_scalar, -1, 1);
-
-    ImGui::Checkbox("Use muzzle location", &aimbot::use_muzzle_location);
-    ImGui::SliderFloat("Muzzle scalar", &aimbot::muzzle_scalar, -100, 100);
-
-    ImGui::PopItemWidth();
-
-    */
-
-    ImGui::EndChild();
-    ImGui::EndGroup();
-
-    ImGui::SameLine();
-
-    ImGui::SetCursorPosX({ImGui::GetCursorPos().x + 10});
-    ImGui::BeginGroup();
-    ImGui::BeginChild("right_settings##right_settings", ImVec2(right_child_width, 0));
-
-    ImGui::Text("Marker settings");
-    ImGui::Separator();
-    ImGui::PushItemWidth(100 + 0 * ImGui::GetWindowWidth() * 0.75);
-
-    ImGui::Combo("Style##aim_assist_combo", (int*)&visuals::aimbot_visual_settings.marker_style, visuals::marker_labels, IM_ARRAYSIZE(visuals::marker_labels));
-    ImGui::ColorEdit4("Colour", &visuals::aimbot_visual_settings.marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-    ImGui::SliderInt("Radius", &visuals::aimbot_visual_settings.marker_size, 1, 10);
-
-    if (visuals::aimbot_visual_settings.marker_style == visuals::MarkerStyle::kCircle || visuals::aimbot_visual_settings.marker_style == visuals::MarkerStyle::kSquare) {
-        ImGui::SliderInt("Thickness", &visuals::aimbot_visual_settings.marker_thickness, 1, 10);
-    }
-
-    ImGui::Text("Marker preview");
-
-    ImVec2 window_position = ImGui::GetWindowPos();
-    ImVec2 window_size = ImGui::GetWindowSize();
-
-    ImDrawList* imgui_draw_list = ImGui::GetWindowDrawList();
-    ImVec2 current_cursor_pos = ImGui::GetCursorPos();
-    ImVec2 local_cursor_pos = {window_position.x + ImGui::GetCursorPosX(), window_position.y + ImGui::GetCursorPosY()};
-    imgui_draw_list->AddRectFilled(local_cursor_pos, {local_cursor_pos.x + 100, local_cursor_pos.y + 100}, ImColor(0, 0, 0, 255), 0, 0);
-    ImVec2 center = {local_cursor_pos.x + 100 / 2, local_cursor_pos.y + 100 / 2};
-
-    int marker_style = visuals::aimbot_visual_settings.marker_style;
-    int marker_size = visuals::aimbot_visual_settings.marker_size;
-    int marker_thickness = visuals::aimbot_visual_settings.marker_thickness;
-    ImColor marker_colour = visuals::aimbot_visual_settings.marker_colour;
-
-    switch (visuals::aimbot_visual_settings.marker_style) {
-        case visuals::MarkerStyle::kDot:
-            imgui_draw_list->AddCircleFilled(center, marker_size, marker_colour);
-            break;
-        case visuals::MarkerStyle::kCircle:
-            imgui_draw_list->AddCircle(center, marker_size, marker_colour, 0, marker_thickness);
-            break;
-        case visuals::MarkerStyle::kFilledSquare:
-            imgui_draw_list->AddRectFilled({center.x - marker_size, center.y - marker_size}, {center.x + marker_size, center.y + marker_size}, marker_colour, 0);
-            break;
-        case visuals::MarkerStyle::kSquare:
-            imgui_draw_list->AddRect({center.x - marker_size, center.y - marker_size}, {center.x + marker_size, center.y + marker_size}, marker_colour, 0, 0, marker_thickness);
-            break;
-        default:
-            break;
-    }
-
-    current_cursor_pos.y += 100;
-    ImGui::Separator();
-    ImGui::SetCursorPos(current_cursor_pos);
-
-    ImGui::Checkbox("Scale by distance", &visuals::aimbot_visual_settings.scale_by_distance);
-    ImGui::SliderInt("Distance for scaling", &visuals::aimbot_visual_settings.distance_for_scaling, 1, 15000);
-
-    ImGui::EndChild();
-    ImGui::EndGroup();
 }
 
 void DrawRoutesMenu(void) {
@@ -1812,176 +1873,140 @@ void DrawRoutesMenu(void) {
 }
 
 void DrawRadarMenu(void) {
-    int right_child_width = 200;
+    static ImGuiTableFlags flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Resizable | (ImGuiTableFlags_ContextMenuInBody & 0) | (ImGuiTableFlags_NoBordersInBody & 0) | ImGuiTableFlags_BordersOuter;
+    if (ImGui::BeginTable("radartable", 1, flags, ImVec2(0, ImGui::GetContentRegionAvail().y))) {
+        ImGui::TableSetupColumn("Radar", ImGuiTableColumnFlags_WidthStretch);
+        // ImGui::TableSetupColumn("Visuals", ImGuiTableColumnFlags_WidthFixed);
+        // ImGui::TableSetupColumn("Visuals", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableHeadersRow();
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::PushItemWidth(item_width);
+        if (ImGui::CollapsingHeader("General settings")) {
+            ImGui::Indent();
+            ImGui::Checkbox("Enabled##radar_enabled", &radar::radar_settings.enabled);
+            if (ImGui::SliderInt("Poll rate (Hz)##routes", &radar::radar_settings.radar_poll_frequency, 1, 300)) {
+                radar::get_radar_data_timer.SetFrequency(radar::radar_settings.radar_poll_frequency);
+            }
 
-    ImGui::BeginGroup();
-    ImGui::BeginChild("left_settings##left_settings", ImVec2(ImGui::GetWindowContentRegionWidth() > right_child_width ? ImGui::GetWindowContentRegionWidth() - right_child_width : ImGui::GetWindowContentRegionWidth(), 0));
+            ImGui::SliderFloat("Zoom", &visuals::radar_visual_settings.zoom, 0, 10);
+            ImGui::Checkbox("Show friendlies", &radar::radar_settings.show_friendlies);
+            ImGui::Checkbox("Show flags", &radar::radar_settings.show_flags);
+            ImGui::Unindent();
+        }
 
-    ImGui::Text("Settings");
-    ImGui::Separator();
-    ImGui::Checkbox("Enabled##radar_enabled", &radar::radar_settings.enabled);
-    ImGui::PushItemWidth(100);
-    if (ImGui::SliderInt("Poll rate (Hz)##routes", &radar::radar_settings.radar_poll_frequency, 1, 300)) {
-        radar::get_radar_data_timer.SetFrequency(radar::radar_settings.radar_poll_frequency);
+        if (ImGui::CollapsingHeader("Visual settings")) {
+            ImGui::Indent();
+            ImGui::ColorEdit4("Backgrond Colour", &visuals::radar_visual_settings.window_background_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+            ImGui::Checkbox("Draw axes", &visuals::radar_visual_settings.draw_axes);
+            if (visuals::radar_visual_settings.draw_axes)
+                ImGui::SliderInt("Axes thickness", &visuals::radar_visual_settings.axes_thickness, 1, 4);
+            ImGui::Unindent();
+        }
+
+        if (ImGui::CollapsingHeader("Markers")) {
+            ImGui::Indent();
+            float marker_preview_size = 100;
+
+            ImGui::Combo("Style##radar_combo", (int*)&visuals::radar_visual_settings.marker_style, visuals::marker_labels, IM_ARRAYSIZE(visuals::marker_labels));
+            ImGui::SliderInt("Radius", &visuals::radar_visual_settings.marker_size, 1, 50);
+
+            if (visuals::radar_visual_settings.marker_style == visuals::MarkerStyle::kCircle || visuals::radar_visual_settings.marker_style == visuals::MarkerStyle::kSquare) {
+                ImGui::SliderInt("Thickness", &visuals::radar_visual_settings.marker_thickness, 1, 10);
+            }
+
+            ImGui::Text("Marker preview");
+
+            ImVec2 window_position = ImGui::GetWindowPos();
+            ImVec2 window_size = ImGui::GetWindowSize();
+
+            ImDrawList* imgui_draw_list = ImGui::GetWindowDrawList();
+            ImVec2 current_cursor_pos = ImGui::GetCursorPos();
+            ImVec2 local_cursor_pos = {window_position.x + ImGui::GetCursorPosX(), window_position.y + ImGui::GetCursorPosY() - ImGui::GetScrollY()};
+            imgui_draw_list->AddRectFilled(local_cursor_pos, {local_cursor_pos.x + marker_preview_size, local_cursor_pos.y + marker_preview_size}, ImColor(0, 0, 0, 255), 0, 0);
+            ImVec2 center = {local_cursor_pos.x + marker_preview_size / 2, local_cursor_pos.y + marker_preview_size / 2};
+
+            int marker_style = visuals::radar_visual_settings.marker_style;
+            int marker_size = visuals::radar_visual_settings.marker_size;
+            int marker_thickness = visuals::radar_visual_settings.marker_thickness;
+            ImColor marker_colour = visuals::radar_visual_settings.enemy_marker_colour;
+
+            switch (visuals::radar_visual_settings.marker_style) {
+                case visuals::MarkerStyle::kDot:
+                    imgui_draw_list->AddCircleFilled(center, marker_size, marker_colour);
+                    break;
+                case visuals::MarkerStyle::kCircle:
+                    imgui_draw_list->AddCircle(center, marker_size, marker_colour, 0, marker_thickness);
+                    break;
+                case visuals::MarkerStyle::kFilledSquare:
+                    imgui_draw_list->AddRectFilled({center.x - marker_size, center.y - marker_size}, {center.x + marker_size, center.y + marker_size}, marker_colour, 0);
+                    break;
+                case visuals::MarkerStyle::kSquare:
+                    imgui_draw_list->AddRect({center.x - marker_size, center.y - marker_size}, {center.x + marker_size, center.y + marker_size}, marker_colour, 0, 0, marker_thickness);
+                    break;
+                default:
+                    break;
+            }
+
+            current_cursor_pos.y += marker_preview_size;
+            ImGui::SetCursorPos(current_cursor_pos);
+            ImGui::Spacing();
+
+            // ImGui::Separator();
+            ImGui::ColorEdit4("Friendly player Colour", &visuals::radar_visual_settings.friendly_marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+            ImGui::ColorEdit4("Enemy player Colour", &visuals::radar_visual_settings.enemy_marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+            ImGui::ColorEdit4("Friendly flag Colour", &visuals::radar_visual_settings.friendly_flag_marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+            ImGui::ColorEdit4("Enemy flag Colour", &visuals::radar_visual_settings.enemy_flag_marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+            ImGui::Unindent();
+        }
+
+        // ImGui::TableSetColumnIndex(1);
+        // ImGui::PushItemWidth(item_width);
+
+        ImGui::EndTable();
     }
-    ImGui::PopItemWidth();
-    ImGui::PushItemWidth(100);
-    // ImGui::SliderInt("Window size", &visuals::radar_visual_settings.window_size, 0, 1000);
-    ImGui::PopItemWidth();
-    ImGui::PushItemWidth(100);
-    ImGui::ColorEdit4("Radar backgrond Colour", &visuals::radar_visual_settings.window_background_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-    ImGui::PopItemWidth();
-    ImGui::Checkbox("Draw axes", &visuals::radar_visual_settings.draw_axes);
-    ImGui::PushItemWidth(100);
-    ImGui::SliderInt("Axes thickness", &visuals::radar_visual_settings.axes_thickness, 1, 4);
-    ImGui::PopItemWidth();
-    ImGui::Checkbox("Show friendlies", &radar::radar_settings.show_friendlies);
-    ImGui::Checkbox("Show flags", &radar::radar_settings.show_flags);
-
-    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(2 * 0.05, 2 * 0.05, 2 * 0.05, 2 * 0.1));
-    ImGui::Separator();
-    ImGui::PopStyleColor();
-
-    ImGui::Separator();
-    ImGui::PushItemWidth(100);
-    ImGui::SliderFloat("Zoom", &visuals::radar_visual_settings.zoom, 0, 10);
-    ImGui::PopItemWidth();
-    ImGui::PushItemWidth(100);
-    ImGui::ColorEdit4("Friendly player Colour", &visuals::radar_visual_settings.friendly_marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-    ImGui::ColorEdit4("Enemy player Colour", &visuals::radar_visual_settings.enemy_marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-    ImGui::ColorEdit4("Friendly flag Colour", &visuals::radar_visual_settings.friendly_flag_marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-    ImGui::ColorEdit4("Enemy flag Colour", &visuals::radar_visual_settings.enemy_flag_marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-    ImGui::PopItemWidth();
-
-    ImGui::EndChild();
-    ImGui::EndGroup();
-
-    ImGui::SameLine();
-
-    ImGui::SetCursorPosX({ImGui::GetCursorPos().x + 10});
-    ImGui::BeginGroup();
-    ImGui::BeginChild("right_settings##right_settings", ImVec2(right_child_width, 0));
-
-    ImGui::Text("Marker settings");
-    ImGui::Separator();
-    ImGui::PushItemWidth(100 + 0 * ImGui::GetWindowWidth() * 0.75);
-
-    ImGui::Combo("Style##radar_combo", (int*)&visuals::radar_visual_settings.marker_style, visuals::marker_labels, IM_ARRAYSIZE(visuals::marker_labels));
-    ImGui::SliderInt("Radius", &visuals::radar_visual_settings.marker_size, 1, 50);
-
-    if (visuals::radar_visual_settings.marker_style == visuals::MarkerStyle::kCircle || visuals::radar_visual_settings.marker_style == visuals::MarkerStyle::kSquare) {
-        ImGui::SliderInt("Thickness", &visuals::radar_visual_settings.marker_thickness, 1, 10);
-    }
-
-    ImGui::Text("Marker preview");
-
-    ImVec2 window_position = ImGui::GetWindowPos();
-    ImVec2 window_size = ImGui::GetWindowSize();
-
-    ImDrawList* imgui_draw_list = ImGui::GetWindowDrawList();
-    ImVec2 current_cursor_pos = ImGui::GetCursorPos();
-    ImVec2 local_cursor_pos = {window_position.x + ImGui::GetCursorPosX(), window_position.y + ImGui::GetCursorPosY()};
-    imgui_draw_list->AddRectFilled(local_cursor_pos, {local_cursor_pos.x + 100, local_cursor_pos.y + 100}, ImColor(0, 0, 0, 255), 0, 0);
-    ImVec2 center = {local_cursor_pos.x + 100 / 2, local_cursor_pos.y + 100 / 2};
-
-    int marker_style = visuals::radar_visual_settings.marker_style;
-    int marker_size = visuals::radar_visual_settings.marker_size;
-    int marker_thickness = visuals::radar_visual_settings.marker_thickness;
-    ImColor marker_colour = visuals::radar_visual_settings.enemy_marker_colour;
-
-    switch (visuals::radar_visual_settings.marker_style) {
-        case visuals::MarkerStyle::kDot:
-            imgui_draw_list->AddCircleFilled(center, marker_size, marker_colour);
-            break;
-        case visuals::MarkerStyle::kCircle:
-            imgui_draw_list->AddCircle(center, marker_size, marker_colour, 0, marker_thickness);
-            break;
-        case visuals::MarkerStyle::kFilledSquare:
-            imgui_draw_list->AddRectFilled({center.x - marker_size, center.y - marker_size}, {center.x + marker_size, center.y + marker_size}, marker_colour, 0);
-            break;
-        case visuals::MarkerStyle::kSquare:
-            imgui_draw_list->AddRect({center.x - marker_size, center.y - marker_size}, {center.x + marker_size, center.y + marker_size}, marker_colour, 0, 0, marker_thickness);
-            break;
-        default:
-            break;
-    }
-
-    ImGui::EndChild();
-    ImGui::EndGroup();
-
-    return;
-
-    ImGui::BeginGroup();
-    // ImGui::BeginChild("left_settings##radar", ImVec2(ImGui::GetWindowContentRegionWidth() > right_child_width ? ImGui::GetWindowContentRegionWidth() - right_child_width : ImGui::GetWindowContentRegionWidth(), 0));
-    ImGui::Text("Radar");
-    ImGui::Separator();
-    ImGui::Checkbox("Radar enabled", &radar::radar_settings.enabled);
-    ImGui::SliderFloat("Zoom", &visuals::radar_visual_settings.zoom, 0, 10);
-
-    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(2 * 0.05, 2 * 0.05, 2 * 0.05, 2 * 0.1));
-    ImGui::Separator();
-    ImGui::PopStyleColor();
-
-    ImGui::ColorEdit4("Friendly Colour", &visuals::radar_visual_settings.friendly_marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-    ImGui::ColorEdit4("Enemy Colour", &visuals::radar_visual_settings.enemy_marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-
-    // ImGui::EndChild();
-
-    ImGui::EndGroup();
 }
 
 void DrawESPMenu(void) {
-    ImGui::Text("Settings");
-    ImGui::Separator();
+    static ImGuiTableFlags flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Resizable | (ImGuiTableFlags_ContextMenuInBody & 0) | (ImGuiTableFlags_NoBordersInBody & 0) | ImGuiTableFlags_BordersOuter;
+    if (ImGui::BeginTable("esptable", 1, flags, ImVec2(0, ImGui::GetContentRegionAvail().y))) {
+        ImGui::TableSetupColumn("ESP", ImGuiTableColumnFlags_WidthStretch);
+        // ImGui::TableSetupColumn("Visuals", ImGuiTableColumnFlags_WidthFixed);
+        // ImGui::TableSetupColumn("Visuals", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableHeadersRow();
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::PushItemWidth(item_width);
+        if (ImGui::CollapsingHeader("General settings")) {
+            ImGui::Indent();
+            ImGui::Checkbox("Enabled", &esp::esp_settings.enabled);
+            if (ImGui::SliderInt("Poll rate (Hz)", &esp::esp_settings.poll_frequency, 1, 300)) {
+                esp::get_esp_data_timer.SetFrequency(esp::esp_settings.poll_frequency);
+            }
+            ImGui::Checkbox("Show friendlies", &esp::esp_settings.show_friendlies);
+            ImGui::Unindent();
+        }
 
-    ImGui::Checkbox("Enabled", &esp::esp_settings.enabled);
-    ImGui::PushItemWidth(100);
-    if (ImGui::SliderInt("Poll rate (Hz)", &esp::esp_settings.poll_frequency, 1, 300)) {
-        esp::get_esp_data_timer.SetFrequency(esp::esp_settings.poll_frequency);
-    }
-    ImGui::PopItemWidth();
-    // ImGui::SliderFloat("Player width to height ratio", &esp::esp_settings.width_to_height_ratio, 0, 2);
+        if (ImGui::CollapsingHeader("BoundingBox settings")) {
+            ImGui::Indent();
+            ImGui::SliderInt("Box thickness", &visuals::esp_visual_settings.bounding_box_settings.box_thickness, 1, 20);
+            ImGui::ColorEdit4("Friendly Colour##box", &visuals::esp_visual_settings.bounding_box_settings.friendly_player_box_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+            ImGui::ColorEdit4("Enemy Colour##box", &visuals::esp_visual_settings.bounding_box_settings.enemy_player_box_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+            ImGui::Unindent();
+        }
 
-    // ImGui::Checkbox("Disable Z-Buffer")
+        if (ImGui::CollapsingHeader("Snapline settings")) {
+            ImGui::Indent();
+            ImGui::Checkbox("Show lines", &esp::esp_settings.show_lines);
+            ImGui::ColorEdit4("Enemy Colour##line", &visuals::esp_visual_settings.line_settings.enemy_player_line_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+            ImGui::SliderInt("Line thickness", &visuals::esp_visual_settings.line_settings.line_thickness, 1, 20);
+            ImGui::Unindent();
+        }
 
-    ImGui::Checkbox("Show friendlies", &esp::esp_settings.show_friendlies);
+        // ImGui::TableSetColumnIndex(1);
+        // ImGui::PushItemWidth(item_width);
 
-    ImGui::Text("Bounding box settings");
-    ImGui::Separator();
-    ImGui::PushItemWidth(100);
-    ImGui::SliderInt("Box thickness", &visuals::esp_visual_settings.bounding_box_settings.box_thickness, 1, 20);
-    ImGui::PopItemWidth();
-
-    // ImGui::Separator();
-
-    ImGui::PushItemWidth(100);
-    ImGui::ColorEdit4("Friendly Colour##box", &visuals::esp_visual_settings.bounding_box_settings.friendly_player_box_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-    ImGui::ColorEdit4("Enemy Colour##box", &visuals::esp_visual_settings.bounding_box_settings.enemy_player_box_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-    ImGui::PopItemWidth();
-
-    ImGui::Text("Snaplines settings");
-    ImGui::Separator();
-    ImGui::Checkbox("Show lines", &esp::esp_settings.show_lines);
-    ImGui::PushItemWidth(100);
-    ImGui::ColorEdit4("Enemy Colour##line", &visuals::esp_visual_settings.line_settings.enemy_player_line_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-    ImGui::PopItemWidth();
-    ImGui::PushItemWidth(100);
-    ImGui::SliderInt("Line thickness", &visuals::esp_visual_settings.line_settings.line_thickness, 1, 20);
-    ImGui::PopItemWidth();
-
-    if (false) {
-        ImGui::Text("Name settings");
-        ImGui::Separator();
-        ImGui::Checkbox("Show names", &esp::esp_settings.show_names);
-        ImGui::PushItemWidth(100);
-
-        ImGui::SliderInt("Name text scale", &visuals::esp_visual_settings.name_settings.scale, 1, 10);
-        ImGui::SliderInt("Name height offset", &visuals::esp_visual_settings.name_settings.name_height_offset, -100, 100);
-        ImGui::PopItemWidth();
-        ImGui::PushItemWidth(100);
-        ImGui::ColorEdit4("Friendly Colour##name", &visuals::esp_visual_settings.name_settings.friendly_name_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-        ImGui::ColorEdit4("Enemy Colour##name", &visuals::esp_visual_settings.name_settings.enemy_name_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-        ImGui::PopItemWidth();
+        ImGui::EndTable();
     }
 }
 
@@ -2054,77 +2079,132 @@ void DrawCrosshairMenu(void) {
 }
 
 void DrawConfigMenu(void) {
-    ImGui::BeginGroup();
+    static ImGuiTableFlags flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Resizable | (ImGuiTableFlags_ContextMenuInBody & 0) | (ImGuiTableFlags_NoBordersInBody & 0) | ImGuiTableFlags_BordersOuter;
+    if (ImGui::BeginTable("configtable", 1, flags, ImVec2(0, ImGui::GetContentRegionAvail().y))) {
+        ImGui::TableSetupColumn("Configs", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::PushItemWidth(item_width);
 
-    ImGui::BeginChild("config_menu_child##left", ImVec2(ImGui::GetWindowContentRegionWidth() * 0.5, 0));
-
-    static char filename_buffer[256] = "default.cfg";
-
-    ImGui::Text("Save config");
-    ImGui::Separator();
-
-    ImGui::PushItemWidth(100);
-    ImGui::InputText("File name##save_config_file", filename_buffer, 255);
-    ImGui::PopItemWidth();
-    if (ImGui::Button("Save config##save_config_file")) {
-        config::SaveConfig(filename_buffer);
-    }
-
-    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(2 * 0.05, 2 * 0.05, 2 * 0.05, 2 * 0.1));
-    ImGui::Separator();
-    ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0, 20));
-
-    ImGui::Text("Load config");
-    ImGui::Separator();
-    // Combo of existing configs
-
-    vector<UsefulSnippets::Files::FileObject> config_files = UsefulSnippets::Files::getFiles("", ".cfg");
-
-    static const char* config_filenames[256];
-    int c = 0;
-    for (vector<UsefulSnippets::Files::FileObject>::iterator i = config_files.begin(); i != config_files.end(); i++) {
-        config_filenames[c] = i->getFileName_cstr();
-        c++;
-    }
-
-    static int config_index = 0;
-    if (config_index > config_files.size() - 1) {
-        config_index = 0;
-    }
-
-    ImGui::PushItemWidth(100);
-    if (ImGui::Combo("Configs##configs_load", &config_index, config_filenames, config_files.size())) {
-    }
-    ImGui::PopItemWidth();
-
-    if (config_files.size() > 0) {
-        if (ImGui::Button("Load config##_config_load")) {
-            config::LoadConfig(config_filenames[config_index]);
+        if (ImGui::CollapsingHeader("Save config")) {
+            ImGui::Indent();
+            static char filename_buffer[256] = "default.cfg";
+            ImGui::InputText("File name##save_config_file", filename_buffer, 255);
+            if (ImGui::Button("Save config##save_config_file")) {
+                config::SaveConfig(filename_buffer);
+            }
+            ImGui::Unindent();
         }
-    } else {
-        ImGui::Text("No config files were found.");
+
+        if (ImGui::CollapsingHeader("Load config")) {
+            ImGui::Indent();
+            vector<UsefulSnippets::Files::FileObject> config_files = UsefulSnippets::Files::getFiles("", ".cfg");
+
+            static const char* config_filenames[256];
+            int c = 0;
+            for (vector<UsefulSnippets::Files::FileObject>::iterator i = config_files.begin(); i != config_files.end(); i++) {
+                config_filenames[c] = i->getFileName_cstr();
+                c++;
+            }
+
+            static int config_index = 0;
+            if (config_index > config_files.size() - 1) {
+                config_index = 0;
+            }
+
+            if (ImGui::Combo("Configs##configs_load", &config_index, config_filenames, config_files.size())) {
+            }
+
+            if (config_files.size() > 0) {
+                if (ImGui::Button("Load config##_config_load")) {
+                    config::LoadConfig(config_filenames[config_index]);
+                }
+            } else {
+                ImGui::Text("No config files were found.");
+            }
+            ImGui::Unindent();
+        }
+        ImGui::EndTable();
     }
-
-    // if (ImGui::Button("Load config")) {
-    //    config::LoadConfig("");
-    //}
-
-    ImGui::EndChild();
-
-    ImGui::EndGroup();
 }
 
 void DrawOtherMenu(void) {
-    ImGui::BeginGroup();
+    static ImGuiTableFlags flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Resizable | (ImGuiTableFlags_ContextMenuInBody & 0) | (ImGuiTableFlags_NoBordersInBody & 0) | ImGuiTableFlags_BordersOuter;
+    if (ImGui::BeginTable("othertable", 1, flags, ImVec2(0, ImGui::GetContentRegionAvail().y))) {
+        ImGui::TableSetupColumn("Other", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::PushItemWidth(item_width);
+        if (ImGui::CollapsingHeader("Crosshair settings")) {
+            ImGui::Indent();
 
-    ImGui::BeginChild("othermenu", ImVec2(ImGui::GetWindowContentRegionWidth() * 0.5, 0));
+            if (ImGui::CollapsingHeader("General settings##crosshair")) {
+                float marker_preview_size = 100;
+                ImGui::Indent();
+                ImGui::Checkbox("Enabled##crosshair_enabled", &visuals::crosshair_settings.show_or_enabled);
+                ImGui::Combo("Style##crosshair_combo", (int*)&visuals::crosshair_settings.marker_style, visuals::marker_labels, IM_ARRAYSIZE(visuals::marker_labels));
+                ImGui::ColorEdit4("Colour", &visuals::crosshair_settings.marker_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+                ImGui::SliderInt("Radius", &visuals::crosshair_settings.marker_size, 1, 50);
 
-    // ImGui::SliderInt("Crosshair index", &other::other_settings.crosshair_index, 0, 100);
+                if (visuals::crosshair_settings.marker_style == visuals::MarkerStyle::kCircle || visuals::crosshair_settings.marker_style == visuals::MarkerStyle::kSquare) {
+                    ImGui::SliderInt("Thickness", &visuals::crosshair_settings.marker_thickness, 1, 10);
+                }
 
-    ImGui::EndChild();
+                ImGui::Text("Crosshair preview");
 
-    ImGui::EndGroup();
+                ImVec2 window_position = ImGui::GetWindowPos();
+                ImVec2 window_size = ImGui::GetWindowSize();
+
+                ImDrawList* imgui_draw_list = ImGui::GetWindowDrawList();
+                ImVec2 current_cursor_pos = ImGui::GetCursorPos();
+                ImVec2 local_cursor_pos = {window_position.x + ImGui::GetCursorPosX(), window_position.y + ImGui::GetCursorPosY()};
+                imgui_draw_list->AddRectFilled(local_cursor_pos, {local_cursor_pos.x + 100, local_cursor_pos.y + 100}, ImColor(0, 0, 0, 255), 0, 0);
+                ImVec2 center = {local_cursor_pos.x + 100 / 2, local_cursor_pos.y + 100 / 2};
+
+                int marker_style = visuals::crosshair_settings.marker_style;
+                int marker_size = visuals::crosshair_settings.marker_size;
+                int marker_thickness = visuals::crosshair_settings.marker_thickness;
+                ImColor marker_colour = visuals::crosshair_settings.marker_colour;
+
+                switch (visuals::crosshair_settings.marker_style) {
+                    case visuals::MarkerStyle::kDot:
+                        imgui_draw_list->AddCircleFilled(center, marker_size, marker_colour);
+                        break;
+                    case visuals::MarkerStyle::kCircle:
+                        imgui_draw_list->AddCircle(center, marker_size, marker_colour, 0, marker_thickness);
+                        break;
+                    case visuals::MarkerStyle::kFilledSquare:
+                        imgui_draw_list->AddRectFilled({center.x - marker_size, center.y - marker_size}, {center.x + marker_size, center.y + marker_size}, marker_colour, 0);
+                        break;
+                    case visuals::MarkerStyle::kSquare:
+                        imgui_draw_list->AddRect({center.x - marker_size, center.y - marker_size}, {center.x + marker_size, center.y + marker_size}, marker_colour, 0, 0, marker_thickness);
+                        break;
+                    default:
+                        break;
+                }
+
+                current_cursor_pos.y += marker_preview_size;
+                ImGui::SetCursorPos(current_cursor_pos);
+                ImGui::Spacing();
+
+                ImGui::Unindent();
+            }
+            ImGui::Unindent();
+        }
+
+        /*
+        if (ImGui::CollapsingHeader("Other options")) {
+            ImGui::Indent();
+
+            // ImGui::Checkbox("Show memory editor", &other::other_settings.show_memory_editor);
+            ImGui::Unindent();
+        }
+        */
+
+        ImGui::EndTable();
+    }
 }
 
 void DrawSkinChangerMenu(void) {}
@@ -2167,6 +2247,7 @@ PROCESSEVENT_HOOK_FUNCTION(UEHookMain) {
             aimbot::Tick();
             esp::Tick();
             radar::Tick();
+            other::Tick();
         }
     }
     ReleaseMutex(dx9::game_dx_mutex);
@@ -2243,7 +2324,7 @@ void DrawImGuiInUE(void) {
             ImDrawList* imgui_draw_list = ImGui::GetWindowDrawList();
 
             int marker_style = visuals::aimbot_visual_settings.marker_style;
-            float marker_size = visuals::aimbot_visual_settings.marker_size;
+            int marker_size = visuals::aimbot_visual_settings.marker_size;
             int marker_thickness = visuals::aimbot_visual_settings.marker_thickness;
             ImColor marker_colour = visuals::aimbot_visual_settings.marker_colour;
 
@@ -2253,8 +2334,11 @@ void DrawImGuiInUE(void) {
                 ImVec2 v(i->projection_.X, i->projection_.Y);
 
                 if (visuals::aimbot_visual_settings.scale_by_distance) {
-                    marker_size = (visuals::aimbot_visual_settings.marker_size - 1) * exp(-i->distance_ / visuals::aimbot_visual_settings.distance_for_scaling) + 1;
+                    marker_size = (visuals::aimbot_visual_settings.marker_size - visuals::aimbot_visual_settings.minimum_marker_size) * exp(-i->distance_ / visuals::aimbot_visual_settings.distance_for_scaling) + visuals::aimbot_visual_settings.minimum_marker_size;
                 }
+
+                float box_size_height = i->height;
+                float box_size_width = i->width;
 
                 switch (visuals::aimbot_visual_settings.marker_style) {
                     case visuals::MarkerStyle::kDot:
@@ -2269,65 +2353,17 @@ void DrawImGuiInUE(void) {
                     case visuals::MarkerStyle::kSquare:
                         imgui_draw_list->AddRect({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, marker_colour, 0, 0, marker_thickness);
                         break;
-                    default:
+                    case visuals::MarkerStyle::kBounds:
+                        imgui_draw_list->AddRect({v.x - box_size_width, v.y - box_size_height}, {v.x + box_size_width, v.y + box_size_height}, marker_colour, 0, 0, marker_thickness);
                         break;
-                }
-            }
-
-
-            /*
-
-            vector<FVector2D>& projections = aimbot::projections_of_predictions;
-
-            for (vector<FVector2D>::iterator projected_prediction = projections.begin(); projected_prediction != projections.end(); projected_prediction++) {
-                ImVec2 v((*projected_prediction).X, (*projected_prediction).Y);
-
-                switch (visuals::aimbot_visual_settings.marker_style) {
-                    case visuals::MarkerStyle::kDot:
-                        imgui_draw_list->AddCircleFilled(v, marker_size, marker_colour);
-                        break;
-                    case visuals::MarkerStyle::kCircle:
-                        imgui_draw_list->AddCircle(v, marker_size, marker_colour, 0, marker_thickness);
-                        break;
-                    case visuals::MarkerStyle::kFilledSquare:
-                        imgui_draw_list->AddRectFilled({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, marker_colour, 0);
-                        break;
-                    case visuals::MarkerStyle::kSquare:
-                        imgui_draw_list->AddRect({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, marker_colour, 0, 0, marker_thickness);
+                    case visuals::MarkerStyle::kFilledBounds:
+                        imgui_draw_list->AddRectFilled({v.x - box_size_width, v.y - box_size_height}, {v.x + box_size_width, v.y + box_size_height}, marker_colour, 0);
                         break;
                     default:
                         break;
                 }
             }
 
-            vector<pair<FVector2D, ImColor>>& projections_coloured = aimbot::projections_of_predictions_coloured;
-
-            for (vector<pair<FVector2D, ImColor>>::iterator projected_prediction = projections_coloured.begin(); projected_prediction != projections_coloured.end(); projected_prediction++) {
-                ImVec2 v((*projected_prediction).first.X, (*projected_prediction).first.Y);
-
-                ImColor marker_colour = projected_prediction->second;
-
-                switch (visuals::aimbot_visual_settings.marker_style) {
-                    case visuals::MarkerStyle::kDot:
-                        imgui_draw_list->AddCircleFilled(v, marker_size, marker_colour);
-                        break;
-                    case visuals::MarkerStyle::kCircle:
-                        imgui_draw_list->AddCircle(v, marker_size, marker_colour, 0, marker_thickness);
-                        break;
-                    case visuals::MarkerStyle::kFilledSquare:
-                        imgui_draw_list->AddRectFilled({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, marker_colour, 0);
-                        break;
-                    case visuals::MarkerStyle::kSquare:
-                        imgui_draw_list->AddRect({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, marker_colour, 0, 0, marker_thickness);
-                        break;
-                    default:
-                        break;
-                }
-            }
-
-            */
-
-            // visuals::projections_of_predictions.clear();
             ImGui::End();
         }
 
@@ -2483,79 +2519,6 @@ void DrawImGuiInUE(void) {
                 }
             }
 
-            /*
-            if (radar::radar_settings.show_flags) {
-                            radar::RadarLocation radar_location = radar::friendly_flag_location;
-
-                            float theta = radar_location.theta;
-
-                            float y = radar_location.r * cos(theta) * visuals::radar_visual_settings.zoom_ * visuals::radar_visual_settings.zoom;
-                            float x = radar_location.r * sin(theta) * visuals::radar_visual_settings.zoom_ * visuals::radar_visual_settings.zoom;
-
-                            if (!radar_location.right)
-                                            x = -abs(x);
-
-                            // float z = x;
-                            // x = y;
-                            // y = z;
-
-                            ImVec2 v(center.x + x, center.y - y);
-
-                            switch (visuals::radar_visual_settings.marker_style) {
-                                            case visuals::MarkerStyle::kDot:
-                                                            imgui_draw_list->AddCircleFilled(v, marker_size, friendly_flag_marker_colour);
-                                                            break;
-                                            case visuals::MarkerStyle::kCircle:
-                                                            imgui_draw_list->AddCircle(v, marker_size, friendly_flag_marker_colour, 0, marker_thickness);
-                                                            break;
-                                            case visuals::MarkerStyle::kFilledSquare:
-                                                            imgui_draw_list->AddRectFilled({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, friendly_flag_marker_colour, 0);
-                                                            break;
-                                            case visuals::MarkerStyle::kSquare:
-                                                            imgui_draw_list->AddRect({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, friendly_flag_marker_colour, 0, 0, marker_thickness);
-                                                            break;
-                                            default:
-                                                            break;
-                            }
-            }
-
-
-            if (radar::radar_settings.show_flags) {
-                            radar::RadarLocation radar_location = radar::enemy_flag_location;
-
-                            float theta = radar_location.theta;
-
-                            float y = radar_location.r * cos(theta) * visuals::radar_visual_settings.zoom_ * visuals::radar_visual_settings.zoom;
-                            float x = radar_location.r * sin(theta) * visuals::radar_visual_settings.zoom_ * visuals::radar_visual_settings.zoom;
-
-                            if (!radar_location.right)
-                                            x = -abs(x);
-
-                            // float z = x;
-                            // x = y;
-                            // y = z;
-
-                            ImVec2 v(center.x + x, center.y - y);
-
-                            switch (visuals::radar_visual_settings.marker_style) {
-                                            case visuals::MarkerStyle::kDot:
-                                                            imgui_draw_list->AddCircleFilled(v, marker_size, enemy_flag_marker_colour);
-                                                            break;
-                                            case visuals::MarkerStyle::kCircle:
-                                                            imgui_draw_list->AddCircle(v, marker_size, enemy_flag_marker_colour, 0, marker_thickness);
-                                                            break;
-                                            case visuals::MarkerStyle::kFilledSquare:
-                                                            imgui_draw_list->AddRectFilled({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, enemy_flag_marker_colour, 0);
-                                                            break;
-                                            case visuals::MarkerStyle::kSquare:
-                                                            imgui_draw_list->AddRect({v.x - marker_size, v.y - marker_size}, {v.x + marker_size, v.y + marker_size}, enemy_flag_marker_colour, 0, 0, marker_thickness);
-                                                            break;
-                                            default:
-                                                            break;
-                            }
-            }
-            */
-
             if (dx9::imgui_show_menu) {
                 ImGui::PopStyleColor();
             }
@@ -2616,25 +2579,37 @@ void DrawImGuiInUE(void) {
         ImGuiStyle& style = ImGui::GetStyle();
         ImVec4* colors = style.Colors;
 
-        ImGui::SetNextWindowPos({game_data::screen_center.X / 2, game_data::screen_center.Y / 2}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({600, 500}, ImGuiCond_FirstUseEver);
+        // ImGui::SetNextWindowPos({game_data::screen_center.X / 2, game_data::screen_center.Y / 2}, ImGuiCond_FirstUseEver);
+        // ImGui::SetNextWindowSize({600, 500}, ImGuiCond_FirstUseEver);
 
-        ImGui::Begin("descension (Ported to T:A) v0.1", NULL, ImGuiWindowFlags_AlwaysAutoResize & 0);
+        ImGui::SetNextWindowPos({100, 100}, ImGuiCond_FirstUseEver);
+
+        ImGui::SetNextWindowSize({800, 500}, ImGuiCond_FirstUseEver);
+
+        static ImVec2 padding = ImGui::GetStyle().FramePadding;
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(padding.x, 8));
+        ImGui::Begin("descension v0.5 | Ported to Tribes:Ascend", NULL, ImGuiWindowFlags_AlwaysAutoResize & 0);
+        ImGui::PopStyleVar();
 
         ImVec2 window_position = ImGui::GetWindowPos();
         ImVec2 window_size = ImGui::GetWindowSize();
         ImVec2 center(window_position.x + window_size.x / 2, window_position.y + window_size.y / 2);
 
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, colors[ImGuiCol_WindowBg]);
-        ImGui::BeginChild("left_child##left_menu", {150, 0}, false);
-        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0));
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_HorizontalScrollbar & 0;
+
+        static float left_menu_width = 125;
+        static float child_height_offset = 10;
+
+        ImGui::PushStyleColor(ImGuiCol_::ImGuiCol_ChildBg, ImColor(0, 0, 0, 0).Value);
+        ImGui::BeginChild("MenuL", ImVec2(left_menu_width, ImGui::GetContentRegionAvail().y - child_height_offset), false, window_flags);
 
         for (int i = 0; i < imgui_menu::buttons_num; i++) {
-            ImVec2 size = ImVec2(ImGui::GetWindowWidth() * .75, 0);
+            ImVec2 size = ImVec2(left_menu_width * 0.75, 0);
             bool b_selected = i == imgui_menu::selected_index;
             if (b_selected) {
-                size.x = ImGui::GetWindowWidth() * 0.9;
+                size.x = left_menu_width * 0.95;
                 // ImGui::PushFont(font_selected_item);
+                ImGui::PushStyleColor(ImGuiCol_::ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_::ImGuiCol_ButtonHovered]);
                 ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(1, 0));
             } else {
                 // size.x = 150 * 0.6;
@@ -2649,17 +2624,18 @@ void DrawImGuiInUE(void) {
             if (!b_selected) {
             } else {
                 // ImGui::PopFont();
+                ImGui::PopStyleColor();
                 ImGui::PopStyleVar();
             }
         }
 
-        ImGui::PopStyleVar();
         ImGui::EndChild();
         ImGui::SameLine();
 
         // ImGui::NextColumn();
 
-        ImGui::BeginChild("right_child##right_menu");
+        ImGui::BeginChild("MenuR", ImVec2(ImGui::GetContentRegionAvailWidth(), ImGui::GetContentRegionAvail().y - child_height_offset), false, window_flags);
+        ImGui::PopStyleColor();
 
         switch (imgui_menu::selected_index) {
             case imgui_menu::LeftMenuButtons::kAimTracker:
@@ -2703,10 +2679,12 @@ void DrawImGuiInUE(void) {
             case imgui_menu::LeftMenuButtons::kTraining:
                 imgui_menu::DrawTrainingMenu();
                 break;
+            case imgui_menu::LeftMenuButtons::kInformation:
+                imgui_menu::DrawTrainingMenu();
+                break;
         }
 
         ImGui::EndChild();
-        ImGui::PopStyleColor();
         ImGui::End();
     }
 }
