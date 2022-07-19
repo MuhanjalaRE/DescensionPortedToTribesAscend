@@ -90,7 +90,7 @@ static const char* marker_labels[] = {"None", "Dot", "Circle", "Filled square", 
 // static const char* marker_labels[] = {"Dot", "Circle", "Filled square", "Square", "Filled rectangle", "Rectangle"};
 
 static struct AimbotVisualSettings {
-    MarkerStyle marker_style = MarkerStyle::kSquare;
+    MarkerStyle marker_style = MarkerStyle::kFilledBounds;
     int marker_size = 6;
     int marker_thickness = 2;
     ImColor marker_colour = {255, 255, 0, 200};
@@ -308,6 +308,8 @@ class WorldObject {
     Vector acceleration_;
 
    public:
+    Character* character_ = NULL;
+
     WorldObject(void) {
         location_ = Vector();
         rotation_ = Rotator();
@@ -416,73 +418,6 @@ static class WeaponObject {
     Vector FactorInGravity(Vector target_location, Vector target_velocity, float gravity, float time, Vector offset = Vector());
 } my_weapon_object;
 
-bool WeaponObject::PredictAimAtTarget(WorldObject* target_object, Vector* output_vector, Vector offset) {
-    if (!owner_) {
-        return false;
-    }
-
-    if (weapon_type_ == WeaponType::kHitscan) {
-        *output_vector = target_object->GetLocation();
-        return true;
-    }
-
-    if (weapon_type_ == WeaponType::kProjectileArching) {
-        return false;
-    }
-
-    /*
-    if (weapon_type_ == WeaponType::kProjectileArching) {
-                    return PredictAimAtTarget_DicksuckingLord(target_object, output_vector, offset);
-    }
-    */
-
-    Vector owner_location = owner_->GetLocation() + offset;
-    Vector owner_velocity = owner_->GetVelocity();
-
-    owner_location = owner_location - owner_velocity * (weapon_parameters_.self_compensation_ping_ / 1000.0);
-
-    Vector target_location = target_object->GetLocation();
-    Vector target_velocity = target_object->GetVelocity();
-    Vector target_acceleration = target_object->GetAcceleration();
-
-    float ping_time = weapon_parameters_.ping_ / 1000.0;
-
-    Vector prediction = target_location;
-    Vector ping_prediction = target_location;
-
-    static vector<double> D(aimbot_parameters_.maximum_iterations, 0);
-    static vector<double> dt(aimbot_parameters_.maximum_iterations, 0);
-
-    int i = 0;
-    do {
-        D[i] = (owner_location - prediction).Magnitude();
-        dt[i] = D[i] / weapon_parameters_.bullet_speed_;
-        if (i > 0 && abs(dt[i] - dt[i - 1]) < aimbot_parameters_.epsilon) {
-            break;
-        }
-
-        prediction = (target_location + (target_velocity * dt[i] * 1) + (target_acceleration * pow(dt[i], 2) * 0.5) - (weapon_parameters_.use_inheritance ? (owner_velocity * (weapon_parameters_.inheritence_ * dt[i])) : Vector()));
-        i++;
-    } while (i < aimbot_parameters_.maximum_iterations);
-
-    if (i == aimbot_parameters_.maximum_iterations) {
-        return false;
-    }
-
-    float full_time = dt[i] + ping_time;
-
-    ping_prediction = prediction = (target_location + (target_velocity * full_time * 1) + (target_acceleration * pow(dt[i], 2) * 0.5) - (weapon_parameters_.use_inheritance ? (owner_velocity * (weapon_parameters_.inheritence_ * full_time)) : Vector()));
-
-    *output_vector = ping_prediction;
-
-    if (weapon_type_ == WeaponType::kProjectileArching) {
-        // ping_prediction = FactorInGravity(target_location, target_velocity, 1500, full_time, offset);
-        return false;
-        *output_vector = ping_prediction;
-    }
-
-    return true;
-}
 }  // namespace abstraction
 
 namespace game_data {
@@ -625,6 +560,147 @@ void GetGameData(void) {
 }
 
 }  // namespace game_data
+
+namespace aimbot {
+/* static */ float delta_time = 0;
+vector<game_data::information::Player> players_previous;
+/* static */ std::chrono::steady_clock::time_point previous_tick = std::chrono::steady_clock::now();
+
+enum AimbotMode { kClosestDistance, kClosestXhair };
+static const char* mode_labels[] = {"Closest distance", "Closest to xhair"};
+static bool enabled = true;
+
+static struct AimbotSettings {
+    AimbotMode aimbot_mode = AimbotMode::kClosestXhair;
+
+    bool enabled = true;  // enabling really just enables aimassist, this isnt really an aimbot
+    bool use_custom_ping = false;
+    bool auto_aim = false;        // this enables the aimbot
+    bool target_everyone = true;  // if we want to do prediction on every single player
+
+    float ping_in_ms = 0;  //-90
+    float unknowndata00[4];
+
+    int maximum_iterations = 10;
+    int epsilon = 0.05;
+
+    bool stay_locked_to_target = true;
+    bool auto_lock_to_new_target = true;
+
+    float aimbot_horizontal_fov_angle = 90;         // 30;
+    float aimbot_horizontal_fov_angle_cos = 0;      // 0.86602540378;
+    float aimbot_horizontal_fov_angle_cos_sqr = 0;  // 0.75;
+
+    bool friendly_fire = false;
+    bool need_line_of_sight = true;
+
+    int aimbot_poll_frequency = 300;
+
+    bool use_triggerbot = false;
+    float triggerbot_pixel_radius = 15;
+
+    float self_compensation_time_in_ms = 0;
+
+    FVector aimbot_offset = {0, 0, 50};
+
+    bool use_weighting = false;
+    int client_weight = 0;
+    int prediction_weight = 1;
+
+    float aimbot_vertical_fov_angle = 30;
+    float aimbot_vertical_fov_angle_sin = 0.5;
+    float aimbot_vertical_fov_angle_sin_sqr = 0.25;
+
+    bool use_acceleration = true;
+
+} aimbot_settings;
+}  // namespace aimbot
+
+namespace abstraction {
+bool WeaponObject::PredictAimAtTarget(WorldObject* target_object, Vector* output_vector, Vector offset) {
+    if (!owner_) {
+        return false;
+    }
+
+    if (weapon_type_ == WeaponType::kHitscan) {
+        *output_vector = target_object->GetLocation();
+        return true;
+    }
+
+    if (weapon_type_ == WeaponType::kProjectileArching) {
+        return false;
+    }
+
+    /*
+    if (weapon_type_ == WeaponType::kProjectileArching) {
+                    return PredictAimAtTarget_DicksuckingLord(target_object, output_vector, offset);
+    }
+    */
+
+    Vector owner_location = owner_->GetLocation() + offset;
+    Vector owner_velocity = owner_->GetVelocity();
+
+    owner_location = owner_location - owner_velocity * (weapon_parameters_.self_compensation_ping_ / 1000.0);
+
+    Vector target_location = target_object->GetLocation();
+    Vector target_velocity = target_object->GetVelocity();
+    Vector target_acceleration = target_object->GetAcceleration();
+
+    if (aimbot::aimbot_settings.use_acceleration) {
+        FVector velocity_previous = FVector();
+        bool player_found = false;
+        for (vector<game_data::information::Player>::iterator player = aimbot::players_previous.begin(); player != aimbot::players_previous.end(); player++) {
+            if (player->character_ == target_object->character_) {
+                player_found = true;
+                velocity_previous = player->velocity_;
+                break;
+            }
+        }
+
+        if (player_found) {
+            target_acceleration = (target_velocity - velocity_previous) / (aimbot::delta_time / 1000.0);
+        }
+    }
+
+    float ping_time = weapon_parameters_.ping_ / 1000.0;
+
+    Vector prediction = target_location;
+    Vector ping_prediction = target_location;
+
+    static vector<double> D(aimbot_parameters_.maximum_iterations, 0);
+    static vector<double> dt(aimbot_parameters_.maximum_iterations, 0);
+
+    int i = 0;
+    do {
+        D[i] = (owner_location - prediction).Magnitude();
+        dt[i] = D[i] / weapon_parameters_.bullet_speed_;
+        if (i > 0 && abs(dt[i] - dt[i - 1]) < aimbot_parameters_.epsilon) {
+            break;
+        }
+
+        prediction = (target_location + (target_velocity * dt[i] * 1) + (target_acceleration * pow(dt[i], 2) * 0.5) - (weapon_parameters_.use_inheritance ? (owner_velocity * (weapon_parameters_.inheritence_ * dt[i])) : Vector()));
+        i++;
+    } while (i < aimbot_parameters_.maximum_iterations);
+
+    if (i == aimbot_parameters_.maximum_iterations) {
+        return false;
+    }
+
+    float full_time = dt[i] + ping_time;
+
+    ping_prediction = prediction = (target_location + (target_velocity * full_time * 1) + (target_acceleration * pow(dt[i], 2) * 0.5) - (weapon_parameters_.use_inheritance ? (owner_velocity * (weapon_parameters_.inheritence_ * full_time)) : Vector()));
+
+    *output_vector = ping_prediction;
+
+    if (weapon_type_ == WeaponType::kProjectileArching) {
+        // ping_prediction = FactorInGravity(target_location, target_velocity, 1500, full_time, offset);
+        return false;
+        *output_vector = ping_prediction;
+    }
+
+    return true;
+}
+}  // namespace abstraction
 
 namespace game_functions {
 bool InLineOfSight(AActor* actor) {
@@ -782,53 +858,6 @@ namespace aimbot {
 // Overshooting means the weapon bullet speed is too low
 // Undershooting means the weapon bullet speed is too high
 
-enum AimbotMode { kClosestDistance, kClosestXhair };
-static const char* mode_labels[] = {"Closest distance", "Closest to xhair"};
-static bool enabled = true;
-
-static struct AimbotSettings {
-    AimbotMode aimbot_mode = AimbotMode::kClosestXhair;
-
-    bool enabled = true;  // enabling really just enables aimassist, this isnt really an aimbot
-    bool use_custom_ping = false;
-    bool auto_aim = false;        // this enables the aimbot
-    bool target_everyone = true;  // if we want to do prediction on every single player
-
-    float ping_in_ms = 0;  //-90
-    float unknowndata00[4];
-
-    int maximum_iterations = 10;
-    int epsilon = 0.05;
-
-    bool stay_locked_to_target = true;
-    bool auto_lock_to_new_target = true;
-
-    float aimbot_horizontal_fov_angle = 90;         // 30;
-    float aimbot_horizontal_fov_angle_cos = 0;      // 0.86602540378;
-    float aimbot_horizontal_fov_angle_cos_sqr = 0;  // 0.75;
-
-    bool friendly_fire = false;
-    bool need_line_of_sight = true;
-
-    int aimbot_poll_frequency = 300;
-
-    bool use_triggerbot = false;
-    float triggerbot_pixel_radius = 15;
-
-    float self_compensation_time_in_ms = 0;
-
-    FVector aimbot_offset = {0, 0, 50};
-
-    bool use_weighting = false;
-    int client_weight = 0;
-    int prediction_weight = 1;
-
-    float aimbot_vertical_fov_angle = 30;
-    float aimbot_vertical_fov_angle_sin = 0.5;
-    float aimbot_vertical_fov_angle_sin_sqr = 0.25;
-
-} aimbot_settings;
-
 static Timer aimbot_poll_timer(aimbot_settings.aimbot_poll_frequency);
 
 static game_data::information::Player target_player;
@@ -970,6 +999,10 @@ void Tick(void) {
 
     // SetupWeapon();
 
+    std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+    delta_time = std::chrono::duration<float>(now - previous_tick).count() * 1000.0;
+    previous_tick = now;
+
     projections_of_predictions.clear();
     projections_of_predictions_coloured.clear();
     aimbot_information.clear();
@@ -996,6 +1029,7 @@ void Tick(void) {
         if (enabled && FindTarget() /*&& target_player.character_*/) {
             player_world_object.SetLocation(target_player.location_);
             player_world_object.SetVelocity(target_player.velocity_);
+            player_world_object.character_ = target_player.character_;
 
             bool result = abstraction::my_weapon_object.PredictAimAtTarget(&player_world_object, &prediction, muzzle_offset);
 
@@ -1091,6 +1125,7 @@ void Tick(void) {
 
             player_world_object.SetLocation(player->location_);
             player_world_object.SetVelocity(player->velocity_);
+            player_world_object.character_ = player->character_;
 
             bool result = abstraction::my_weapon_object.PredictAimAtTarget(&player_world_object, &prediction, muzzle_offset);
 
@@ -1160,6 +1195,8 @@ void Tick(void) {
             game_data::local_player_controller->StopFire(fire_mode);
         }
     }
+
+    players_previous = game_data::game_data.players;
 }
 
 }  // namespace aimbot
@@ -1600,7 +1637,9 @@ void DrawAimAssistMenu(void) {
                 aimbot::aimbot_poll_timer.SetFrequency(aimbot::aimbot_settings.aimbot_poll_frequency);
             }
 
-            ImGui::Checkbox("Use trigger bot (Explosives only)", &aimbot::aimbot_settings.use_triggerbot);
+            ImGui::Checkbox("Factor target acceleration", &aimbot::aimbot_settings.use_acceleration);
+
+            //ImGui::Checkbox("Use trigger bot (Explosives only)", &aimbot::aimbot_settings.use_triggerbot);
 
             ImGui::Checkbox("Use custom ping value", &aimbot::aimbot_settings.use_custom_ping);
 
@@ -1730,6 +1769,13 @@ void DrawAimAssistMenu(void) {
                 }
             }
         }
+
+        if (ImGui::CollapsingHeader("Triggerbot settings")) {
+            ImGui::Indent();
+            ImGui::Checkbox("Enable triggerbot", &aimbot::aimbot_settings.use_triggerbot);
+            ImGui::Unindent();
+        }
+
         ImGui::EndTable();
     }
 }
