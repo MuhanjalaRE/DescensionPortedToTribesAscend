@@ -19,7 +19,7 @@
 
 #include "detours.h"
 
-#define USE_MID_FUNCTION_PRESENT_HOOK1
+#define USE_MID_FUNCTION_PRESENT_HOOK
 #define HWND_WINDOW_NAME "Tribes: Ascend (32-bit, DX9)"
 
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -250,6 +250,14 @@ LRESULT WINAPI CustomWindowProcCallback(HWND hWnd, UINT msg, WPARAM wParam, LPAR
     if (msg == WM_KEYDOWN) {
         if (wParam == VK_INSERT) {
             imgui_show_menu = !imgui_show_menu;
+        } else if (wParam == 17) {  // LCONTROL
+            aimbot::Reset();
+        } else if (wParam == 16) {  // LSHIFT
+            aimbot::aimbot_enabled = true;
+        }
+    } else if (msg == WM_KEYUP) {
+        if (wParam == 16) {  // LSHIFT
+            aimbot::aimbot_enabled = false;
         }
     }
 

@@ -569,6 +569,7 @@ vector<game_data::information::Player> players_previous;
 enum AimbotMode { kClosestDistance, kClosestXhair };
 static const char* mode_labels[] = {"Closest distance", "Closest to xhair"};
 static bool enabled = true;
+extern bool aimbot_enabled = false;
 
 static struct AimbotSettings {
     AimbotMode aimbot_mode = AimbotMode::kClosestXhair;
@@ -1093,7 +1094,7 @@ void Tick(void) {
                     aimbot_information.push_back({(prediction - game_data::my_player.location_).Magnitude(), projection, height, width});
                 }
 
-                if (aimbot_settings.auto_aim) {
+                if (aimbot_settings.auto_aim || aimbot_enabled) {
                     prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight;
                     FRotator aim_rotator = math::VectorToRotator(prediction - game_data::my_player.location_);
                     FRotator& aim_rotator_reference = aim_rotator;
@@ -1602,7 +1603,7 @@ bool LoadConfig(const char* filename) {
 namespace imgui {
 namespace imgui_menu {
 enum LeftMenuButtons { kAimAssist, kAimbot, kESP, kRadar, kOther, kAimTracker, kRoutes, kOptions, kCrosshair, kSkinChanger, kConfigs, kCredits, kLua, kBindings, kPID, kTraining, kInformation };
-static const char* button_text[] = {"Aim assist", "-", "ESP", "Radar", "Other", "-", "-", "-", "-", "-", "Configs", "-", "-", "-", "-", "-", "Information"};
+static const char* button_text[] = {"Aim assist", "-", "ESP", "Radar", "Other", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "Information"};
 // static const char* button_text[] = {"-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "Scripting", "-", "-"};
 static const int buttons_num = sizeof(button_text) / sizeof(char*);
 static int selected_index = LeftMenuButtons::kInformation;  // LeftMenuButtons::kAimAssist;
@@ -1780,6 +1781,7 @@ void DrawAimAssistMenu(void) {
     }
 }
 
+/*
 void DrawRoutesMenu(void) {
     return;
     static Timer routes_file_check_timer(5);
@@ -1808,7 +1810,7 @@ void DrawRoutesMenu(void) {
     ImGui::Text("Routes");
     ImGui::Separator();
 
-    static vector<UsefulSnippets::Files::FileObject> route_files = UsefulSnippets::Files::getFiles("routes" /*"Basic Routes"*/, ".txt", true);
+    static vector<UsefulSnippets::Files::FileObject> route_files = UsefulSnippets::Files::getFiles("routes", ".txt", true);
 
     static const char* route_filenames[256];
     static const char* route_paths[256];
@@ -1917,6 +1919,7 @@ void DrawRoutesMenu(void) {
     ImGui::EndChild();
     ImGui::EndGroup();
 }
+*/
 
 void DrawRadarMenu(void) {
     static ImGuiTableFlags flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Resizable | (ImGuiTableFlags_ContextMenuInBody & 0) | (ImGuiTableFlags_NoBordersInBody & 0) | ImGuiTableFlags_BordersOuter;
@@ -2124,6 +2127,7 @@ void DrawCrosshairMenu(void) {
     ImGui::EndGroup();
 }
 
+/*
 void DrawConfigMenu(void) {
     static ImGuiTableFlags flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Resizable | (ImGuiTableFlags_ContextMenuInBody & 0) | (ImGuiTableFlags_NoBordersInBody & 0) | ImGuiTableFlags_BordersOuter;
     if (ImGui::BeginTable("configtable", 1, flags, ImVec2(0, ImGui::GetContentRegionAvail().y))) {
@@ -2174,6 +2178,7 @@ void DrawConfigMenu(void) {
         ImGui::EndTable();
     }
 }
+*/
 
 void DrawOtherMenu(void) {
     static ImGuiTableFlags flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Resizable | (ImGuiTableFlags_ContextMenuInBody & 0) | (ImGuiTableFlags_NoBordersInBody & 0) | ImGuiTableFlags_BordersOuter;
@@ -2287,7 +2292,7 @@ PROCESSEVENT_HOOK_FUNCTION(UEHookMain) {
         }
         */
 
-        keyManager.checkKeyStates(false);
+        //keyManager.checkKeyStates(false);
         game_data::GetGameData();
         if (game_data::my_player.is_valid_ || true) {
             aimbot::Tick();
@@ -2338,7 +2343,7 @@ bool AddHook(UFunction* function, _ProcessEvent hook) {
 }  // namespace hooks
 
 void HookUnrealEngine(void) {
-    keyManager.addKey(VK_LCONTROL, &aimbot::Reset);
+    //keyManager.addKey(VK_LCONTROL, &aimbot::Reset);
 
     // Hook32::JumpHook processevent_hook(0x00456F90, (DWORD)hooks::ProcessEventHook);
     UFunction* ufunction = (UFunction*)UObject::FindObject<UFunction>((char*)ue::ufunction_to_hook);
@@ -2351,7 +2356,7 @@ void HookUnrealEngine(void) {
     DetourAttach(&(PVOID&)hooks::original_processevent, hooks::ProcessEventHook);
     DetourTransactionCommit();
 
-    config::LoadConfig("default.cfg");
+    //config::LoadConfig("default.cfg");
     LOG("Finished hooking Unreal Engine 3 and setting up.");
 }
 
@@ -2699,18 +2704,18 @@ void DrawImGuiInUE(void) {
             case imgui_menu::LeftMenuButtons::kOther:
                 imgui_menu::DrawOtherMenu();
                 break;
-            case imgui_menu::LeftMenuButtons::kRoutes:
-                imgui_menu::DrawRoutesMenu();
-                break;
+            //case imgui_menu::LeftMenuButtons::kRoutes:
+            //    imgui_menu::DrawRoutesMenu();
+            //    break;
             case imgui_menu::LeftMenuButtons::kOptions:
                 // imgui_menu::DrawOptionsMenu();
                 break;
             case imgui_menu::LeftMenuButtons::kCrosshair:
                 imgui_menu::DrawCrosshairMenu();
                 break;
-            case imgui_menu::LeftMenuButtons::kConfigs:
-                imgui_menu::DrawConfigMenu();
-                break;
+            //case imgui_menu::LeftMenuButtons::kConfigs:
+            //    imgui_menu::DrawConfigMenu();
+            //    break;
 #ifdef USE_SOL
             case imgui_menu::LeftMenuButtons::kLua:
                 imgui_menu::DrawLUAMenu();
