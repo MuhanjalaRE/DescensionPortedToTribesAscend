@@ -176,6 +176,7 @@ bool IsValid(APawn* pawn) {
 }
 
 bool IsValid(Character* character) {
+    //https://stackoverflow.com/a/8234993
     try {
         return (character && character->PlayerReplicationInfo && character->Health > 0);
     } catch (...) {
@@ -917,7 +918,16 @@ bool FindTarget(void) {
     bool need_to_find_target = true;  //! aimbot_settings.target_everyone;
 
     if (aimbot_settings.stay_locked_to_target) {
-        if (!validate::IsValid(target_player.character_)) {
+
+        bool find_if_current_target_exists_in_players_list = false;
+        for (vector<game_data::information::Player>::iterator player = game_data::game_data.players.begin(); player != game_data::game_data.players.end(); player++) {
+            if (player->character_ == target_player.character_) {
+                find_if_current_target_exists_in_players_list = true;
+                break;
+            }
+        }
+
+        if (!find_if_current_target_exists_in_players_list || !validate::IsValid(target_player.character_)) {
             if (!aimbot_settings.auto_lock_to_new_target && current_target_character != NULL) {
                 Disable();
                 return false;
@@ -1076,6 +1086,10 @@ void Tick(void) {
                                     // other::SendLeftMouseClick();
                                     game_data::my_player.character_->Weapon->StartFire(fire_mode);
                                     triggerbot_success = true;
+                                }
+                            } else {
+                                if (aimbot_settings.use_triggerbot && !triggerbot_success) {
+                                    game_data::local_player_controller->StopFire(fire_mode);
                                 }
                             }
                         }
