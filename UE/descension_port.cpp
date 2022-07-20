@@ -176,7 +176,11 @@ bool IsValid(APawn* pawn) {
 }
 
 bool IsValid(Character* character) {
-    return (character && character->PlayerReplicationInfo && character->Health > 0);
+    try {
+        return (character && character->PlayerReplicationInfo && character->Health > 0);
+    } catch (...) {
+        return false;
+    }
 }
 
 }  // namespace validate
@@ -1027,14 +1031,14 @@ void Tick(void) {
 
     if (!aimbot_settings.target_everyone) {
         bool triggerbot_success = false;
-        if (enabled && FindTarget() /*&& target_player.character_*/) {
+        if (enabled && FindTarget() && target_player.character_ && target_player.character_->CylinderComponent) {
             player_world_object.SetLocation(target_player.location_);
             player_world_object.SetVelocity(target_player.velocity_);
             player_world_object.character_ = target_player.character_;
 
-            bool result = abstraction::my_weapon_object.PredictAimAtTarget(&player_world_object, &prediction, muzzle_offset);
+            bool result = abstraction::my_weapon_object.PredictAimAtTarget(&player_world_object, &prediction, FVector());
 
-            if (result) {
+            if (result && game_functions::IsInFieldOfView(prediction)) {
                 static const bool use_trace = true;
                 if (use_trace) {
                     static FVector hit_location;
@@ -1095,7 +1099,7 @@ void Tick(void) {
                 }
 
                 if (aimbot_settings.auto_aim || aimbot_enabled) {
-                    prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight;
+                    prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight / 1;  // Don't divide by 2?
                     FRotator aim_rotator = math::VectorToRotator(prediction - game_data::my_player.location_);
                     FRotator& aim_rotator_reference = aim_rotator;
                     game_data::local_player_controller->SetRotation(aim_rotator_reference);
@@ -1640,7 +1644,7 @@ void DrawAimAssistMenu(void) {
 
             ImGui::Checkbox("Factor target acceleration", &aimbot::aimbot_settings.use_acceleration);
 
-            //ImGui::Checkbox("Use trigger bot (Explosives only)", &aimbot::aimbot_settings.use_triggerbot);
+            // ImGui::Checkbox("Use trigger bot (Explosives only)", &aimbot::aimbot_settings.use_triggerbot);
 
             ImGui::Checkbox("Use custom ping value", &aimbot::aimbot_settings.use_custom_ping);
 
@@ -2292,7 +2296,7 @@ PROCESSEVENT_HOOK_FUNCTION(UEHookMain) {
         }
         */
 
-        //keyManager.checkKeyStates(false);
+        // keyManager.checkKeyStates(false);
         game_data::GetGameData();
         if (game_data::my_player.is_valid_ || true) {
             aimbot::Tick();
@@ -2343,7 +2347,7 @@ bool AddHook(UFunction* function, _ProcessEvent hook) {
 }  // namespace hooks
 
 void HookUnrealEngine(void) {
-    //keyManager.addKey(VK_LCONTROL, &aimbot::Reset);
+    // keyManager.addKey(VK_LCONTROL, &aimbot::Reset);
 
     // Hook32::JumpHook processevent_hook(0x00456F90, (DWORD)hooks::ProcessEventHook);
     UFunction* ufunction = (UFunction*)UObject::FindObject<UFunction>((char*)ue::ufunction_to_hook);
@@ -2356,7 +2360,7 @@ void HookUnrealEngine(void) {
     DetourAttach(&(PVOID&)hooks::original_processevent, hooks::ProcessEventHook);
     DetourTransactionCommit();
 
-    //config::LoadConfig("default.cfg");
+    // config::LoadConfig("default.cfg");
     LOG("Finished hooking Unreal Engine 3 and setting up.");
 }
 
@@ -2704,7 +2708,7 @@ void DrawImGuiInUE(void) {
             case imgui_menu::LeftMenuButtons::kOther:
                 imgui_menu::DrawOtherMenu();
                 break;
-            //case imgui_menu::LeftMenuButtons::kRoutes:
+            // case imgui_menu::LeftMenuButtons::kRoutes:
             //    imgui_menu::DrawRoutesMenu();
             //    break;
             case imgui_menu::LeftMenuButtons::kOptions:
@@ -2713,9 +2717,9 @@ void DrawImGuiInUE(void) {
             case imgui_menu::LeftMenuButtons::kCrosshair:
                 imgui_menu::DrawCrosshairMenu();
                 break;
-            //case imgui_menu::LeftMenuButtons::kConfigs:
-            //    imgui_menu::DrawConfigMenu();
-            //    break;
+                // case imgui_menu::LeftMenuButtons::kConfigs:
+                //    imgui_menu::DrawConfigMenu();
+                //    break;
 #ifdef USE_SOL
             case imgui_menu::LeftMenuButtons::kLua:
                 imgui_menu::DrawLUAMenu();
