@@ -176,7 +176,7 @@ bool IsValid(APawn* pawn) {
 }
 
 bool IsValid(Character* character) {
-    //https://stackoverflow.com/a/8234993
+    // https://stackoverflow.com/a/8234993
     try {
         return (character && character->PlayerReplicationInfo && character->Health > 0);
     } catch (...) {
@@ -419,6 +419,7 @@ static class WeaponObject {
     }
 
     bool PredictAimAtTarget(WorldObject* target_object, Vector* output_vector = NULL, Vector offset = Vector());
+    bool PredictAimAtTarget_(WorldObject* target_object, Vector* output_vector = NULL, Vector offset = Vector());
     bool PredictAimAtTarget_DicksuckingLord(WorldObject* target_object, Vector* output_vector = NULL, Vector offset = Vector());
     Vector FactorInGravity(Vector target_location, Vector target_velocity, float gravity, float time, Vector offset = Vector());
 } my_weapon_object;
@@ -582,7 +583,7 @@ static struct AimbotSettings {
     bool enabled = true;  // enabling really just enables aimassist, this isnt really an aimbot
     bool use_custom_ping = false;
     bool auto_aim = false;        // this enables the aimbot
-    bool target_everyone = true;  // if we want to do prediction on every single player
+    bool target_everyone = false;  // if we want to do prediction on every single player
 
     float ping_in_ms = 0;  //-90
     float unknowndata00[4];
@@ -600,7 +601,7 @@ static struct AimbotSettings {
     bool friendly_fire = false;
     bool need_line_of_sight = true;
 
-    int aimbot_poll_frequency = 300;
+    int aimbot_poll_frequency = 60;
 
     bool use_triggerbot = false;
     float triggerbot_pixel_radius = 15;
@@ -623,7 +624,7 @@ static struct AimbotSettings {
 }  // namespace aimbot
 
 namespace abstraction {
-bool WeaponObject::PredictAimAtTarget(WorldObject* target_object, Vector* output_vector, Vector offset) {
+bool WeaponObject::PredictAimAtTarget_(WorldObject* target_object, Vector* output_vector, Vector offset) {
     if (!owner_) {
         return false;
     }
@@ -694,7 +695,90 @@ bool WeaponObject::PredictAimAtTarget(WorldObject* target_object, Vector* output
 
     float full_time = dt[i] + ping_time;
 
-    ping_prediction = prediction = (target_location + (target_velocity * full_time * 1) + (target_acceleration * pow(dt[i], 2) * 0.5) - (weapon_parameters_.use_inheritance ? (owner_velocity * (weapon_parameters_.inheritence_ * full_time)) : Vector()));
+    ping_prediction = prediction = (target_location + (target_velocity * full_time * 1) + (target_acceleration * pow(full_time, 2) * 0.5) - (weapon_parameters_.use_inheritance ? (owner_velocity * (weapon_parameters_.inheritence_ * full_time)) : Vector()));
+
+    *output_vector = ping_prediction;
+
+    if (weapon_type_ == WeaponType::kProjectileArching) {
+        // ping_prediction = FactorInGravity(target_location, target_velocity, 1500, full_time, offset);
+        return false;
+        *output_vector = ping_prediction;
+    }
+
+    return true;
+}
+
+bool WeaponObject::PredictAimAtTarget(WorldObject* target_object, Vector* output_vector, Vector offset) {
+    if (!owner_) {
+        return false;
+    }
+
+    if (weapon_type_ == WeaponType::kHitscan) {
+        *output_vector = target_object->GetLocation();
+        return true;
+    }
+
+    if (weapon_type_ == WeaponType::kProjectileArching) {
+        return false;
+    }
+
+    /*
+    if (weapon_type_ == WeaponType::kProjectileArching) {
+                    return PredictAimAtTarget_DicksuckingLord(target_object, output_vector, offset);
+    }
+    */
+
+    Vector owner_location = owner_->GetLocation() + offset;
+    Vector owner_velocity = owner_->GetVelocity();
+
+    owner_location = owner_location - owner_velocity * (weapon_parameters_.self_compensation_ping_ / 1000.0);
+
+    Vector target_location = target_object->GetLocation();
+    Vector target_velocity = target_object->GetVelocity();
+    Vector target_acceleration = target_object->GetAcceleration();
+
+    if (aimbot::aimbot_settings.use_acceleration) {
+        FVector velocity_previous = FVector();
+        bool player_found = false;
+        for (vector<game_data::information::Player>::iterator player = aimbot::players_previous.begin(); player != aimbot::players_previous.end(); player++) {
+            if (player->character_ == target_object->character_) {
+                player_found = true;
+                velocity_previous = player->velocity_;
+                break;
+            }
+        }
+
+        if (player_found) {
+            target_acceleration = (target_velocity - velocity_previous) / (aimbot::delta_time / 1000.0);
+        }
+    }
+
+    float ping_time = weapon_parameters_.ping_ / 1000.0;
+
+    Vector target_ping_prediction = target_location + (target_velocity * ping_time * 1) + (target_acceleration * pow(ping_time, 2) * 0.5);
+    Vector prediction = target_ping_prediction;
+    Vector ping_prediction = target_ping_prediction;
+
+    static vector<double> D(aimbot_parameters_.maximum_iterations, 0);
+    static vector<double> dt(aimbot_parameters_.maximum_iterations, 0);
+
+    int i = 0;
+    do {
+        D[i] = (owner_location - prediction).Magnitude();
+        dt[i] = D[i] / weapon_parameters_.bullet_speed_;
+        if (i > 0 && abs(dt[i] - dt[i - 1]) < aimbot_parameters_.epsilon) {
+            break;
+        }
+
+        prediction = (target_ping_prediction + (target_velocity * dt[i] * 1) + (target_acceleration * pow(dt[i], 2) * 0.5) - (weapon_parameters_.use_inheritance ? (owner_velocity * (weapon_parameters_.inheritence_ * dt[i])) : Vector()));
+        i++;
+    } while (i < aimbot_parameters_.maximum_iterations);
+
+    if (i == aimbot_parameters_.maximum_iterations) {
+        return false;
+    }
+
+    ping_prediction = prediction = (target_ping_prediction + (target_velocity * dt[i] * 1) + (target_acceleration * pow(dt[i], 2) * 0.5) - (weapon_parameters_.use_inheritance ? (owner_velocity * (weapon_parameters_.inheritence_ * dt[i])) : Vector()));
 
     *output_vector = ping_prediction;
 
@@ -918,7 +1002,6 @@ bool FindTarget(void) {
     bool need_to_find_target = true;  //! aimbot_settings.target_everyone;
 
     if (aimbot_settings.stay_locked_to_target) {
-
         bool find_if_current_target_exists_in_players_list = false;
         for (vector<game_data::information::Player>::iterator player = game_data::game_data.players.begin(); player != game_data::game_data.players.end(); player++) {
             if (player->character_ == target_player.character_) {
@@ -1041,7 +1124,7 @@ void Tick(void) {
 
     if (!aimbot_settings.target_everyone) {
         bool triggerbot_success = false;
-        if (enabled && FindTarget() && target_player.character_ && target_player.character_->CylinderComponent) {
+        if (enabled && FindTarget() /* && target_player.character_ && target_player.character_->CylinderComponent */) {
             player_world_object.SetLocation(target_player.location_);
             player_world_object.SetVelocity(target_player.velocity_);
             player_world_object.character_ = target_player.character_;
@@ -1087,15 +1170,12 @@ void Tick(void) {
                                     game_data::my_player.character_->Weapon->StartFire(fire_mode);
                                     triggerbot_success = true;
                                 }
-                            } else {
-                                if (aimbot_settings.use_triggerbot && !triggerbot_success) {
-                                    game_data::local_player_controller->StopFire(fire_mode);
-                                }
                             }
                         }
                     }
-                    // if (!success)
-                    //    game_data::my_player.character_->Weapon->StopFire(fire_mode);
+                    if (!triggerbot_success) {
+                        game_data::local_player_controller->StopFire(fire_mode);
+                    };
                 }
 
                 if ((imgui::visuals::aimbot_visual_settings.marker_style == imgui::visuals::MarkerStyle::kBounds || imgui::visuals::aimbot_visual_settings.marker_style == imgui::visuals::MarkerStyle::kFilledBounds) && height == -1) {
@@ -1791,7 +1871,10 @@ void DrawAimAssistMenu(void) {
 
         if (ImGui::CollapsingHeader("Triggerbot settings")) {
             ImGui::Indent();
-            ImGui::Checkbox("Enable triggerbot", &aimbot::aimbot_settings.use_triggerbot);
+            if (ImGui::Checkbox("Enable triggerbot", &aimbot::aimbot_settings.use_triggerbot)) {
+                if (game_data::local_player_controller)
+                    game_data::local_player_controller->StopFire(aimbot::fire_mode);
+            }
             ImGui::Unindent();
         }
 
