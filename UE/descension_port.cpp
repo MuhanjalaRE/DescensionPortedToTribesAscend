@@ -1,3 +1,5 @@
+#define CAP_ACCELERATION_
+
 #include "DX.h"
 #include "ue.h"
 
@@ -754,11 +756,12 @@ bool WeaponObject::PredictAimAtTarget(WorldObject* target_object, Vector* output
         if (player_found) {
             target_acceleration = (target_velocity - velocity_previous) / (aimbot::delta_time / 1000.0);
 
+#ifdef CAP_ACCELERATION
             target_acceleration.X = abs(target_acceleration.X) > aimbot::aimbot_settings.acceleration_cap_x ? copysign(aimbot::aimbot_settings.acceleration_cap_x, target_acceleration.X) : target_acceleration.X;
             target_acceleration.Y = abs(target_acceleration.Y) > aimbot::aimbot_settings.acceleration_cap_y ? copysign(aimbot::aimbot_settings.acceleration_cap_y, target_acceleration.Y) : target_acceleration.Y;
             target_acceleration.Z = abs(target_acceleration.Z) > aimbot::aimbot_settings.acceleration_cap_z ? copysign(aimbot::aimbot_settings.acceleration_cap_z, target_acceleration.Z) : target_acceleration.Z;
-
-            //cout << target_acceleration.X << ", " << target_acceleration.Y << ", " << target_acceleration.Z << endl;
+#endif
+            // cout << target_acceleration.X << ", " << target_acceleration.Y << ", " << target_acceleration.Z << endl;
         }
     }
 
@@ -1745,6 +1748,7 @@ void DrawAimAssistMenu(void) {
             }
 
             ImGui::Checkbox("Factor target acceleration", &aimbot::aimbot_settings.use_acceleration);
+#ifdef CAP_ACCELERATION
             if (aimbot::aimbot_settings.use_acceleration) {
                 ImGui::Indent();
                 ImGui::SliderFloat("Acceleration cap (X)", &aimbot::aimbot_settings.acceleration_cap_x, 1, 1E4);
@@ -1752,6 +1756,7 @@ void DrawAimAssistMenu(void) {
                 ImGui::SliderFloat("Acceleration cap (Z)", &aimbot::aimbot_settings.acceleration_cap_z, 1, 1E4);
                 ImGui::Unindent();
             }
+#endif
 
             // ImGui::Checkbox("Use trigger bot (Explosives only)", &aimbot::aimbot_settings.use_triggerbot);
 
@@ -2406,6 +2411,15 @@ void DrawInformationMenuNew(void) {
         ImGui::Text(info0);
         ImGui::Separator();
         ImGui::Text(info1);
+
+        ImGui::Separator();
+
+        const char* info2 = "How to use:\n"
+            "\tPress the INSERT key to toggle the menu\n"
+            "\tPress the LCTRL key to change targets\n"
+            "\tHold the LSHIFT key to enable aimbot (ensure that in game zoom is unbound)\n";
+
+        ImGui::Text(info2);
 
         ImGui::Unindent();
         ImGui::EndTable();
