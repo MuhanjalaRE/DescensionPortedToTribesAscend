@@ -152,7 +152,7 @@ static struct ESPVisualSettings {
     struct NameSettings {
         int name_height_offset = 30;
         int scale = 1;
-        ImColor enemy_name_colour = {255, 255, 255, 1 * 255};
+        ImColor enemy_name_colour = {0, 255, 255, 1 * 255};
         ImColor friendly_name_colour = {0, 255, 0, 1 * 255};
     } name_settings;
 
@@ -465,6 +465,8 @@ class Player : public GameActor {
     bool is_valid_ = false;
     Weapon weapon_ = Weapon::none;
     bool just_respawned = false;
+    wstring name_w_;
+    string name_c_;
 
     Player(void) {
         ;
@@ -491,6 +493,9 @@ class Player : public GameActor {
         energy_ = character_->m_fCurrentPowerPool;
 
         is_valid_ = true;
+
+        name_w_ = wstring(character->PlayerReplicationInfo->PlayerName.Data);
+        name_c_ = string(name_w_.begin(), name_w_.end());
     }
 };
 
@@ -896,7 +901,7 @@ static struct ESPSettings {
     int player_width = 0;
     float width_to_height_ratio = 0.5;
     bool show_lines = true;
-    bool show_names = false;
+    bool show_names = true;
 
 } esp_settings;
 
@@ -946,7 +951,7 @@ void Tick(void) {
 
         string name;
         if (esp_settings.show_names) {
-            // name = player->player_state_->PlayerName.ToString();
+            name = player->name_c_;
         }
 
         esp_information.push_back({center_projection, height, height * (player->character_->CylinderComponent->CollisionRadius / player->character_->CylinderComponent->CollisionHeight), same_team, name});
@@ -1142,7 +1147,7 @@ void Tick(void) {
 
             bool result = abstraction::my_weapon_object.PredictAimAtTarget(&player_world_object, &prediction, FVector());
 
-            if (result && game_functions::IsInFieldOfView(prediction)) {
+            if (result) {
                 static const bool use_trace = true;
                 if (use_trace) {
                     static FVector hit_location;
@@ -1198,7 +1203,7 @@ void Tick(void) {
                     width = height * (target_player.character_->CylinderComponent->CollisionRadius / target_player.character_->CylinderComponent->CollisionHeight);
                 }
 
-                if (projection.Y >= 0) {
+                if (projection.Y > 0 && game_functions::IsInFieldOfView(prediction)) {
                     projections_of_predictions.push_back(projection);
                     aimbot_information.push_back({(prediction - game_data::my_player.location_).Magnitude(), projection, height, width});
                 }
@@ -2154,6 +2159,13 @@ void DrawESPMenu(void) {
                 esp::get_esp_data_timer.SetFrequency(esp::esp_settings.poll_frequency);
             }
             ImGui::Checkbox("Show friendlies", &esp::esp_settings.show_friendlies);
+            ImGui::Checkbox("Show player names", &esp::esp_settings.show_names);
+            if (esp::esp_settings.show_names) {
+                ImGui::Indent();
+                ImGui::ColorEdit4("Friendly name colour##line", &visuals::esp_visual_settings.name_settings.friendly_name_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+                ImGui::ColorEdit4("Enemy name colour##line", &visuals::esp_visual_settings.name_settings.enemy_name_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+                ImGui::Unindent();
+            }
             ImGui::Unindent();
         }
 
@@ -2170,6 +2182,12 @@ void DrawESPMenu(void) {
             ImGui::Checkbox("Show lines", &esp::esp_settings.show_lines);
             ImGui::ColorEdit4("Enemy Colour##line", &visuals::esp_visual_settings.line_settings.enemy_player_line_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
             ImGui::SliderInt("Line thickness", &visuals::esp_visual_settings.line_settings.line_thickness, 1, 20);
+            ImGui::Unindent();
+        }
+
+        if (ImGui::CollapsingHeader("Other settings")) {
+            ImGui::Indent();
+
             ImGui::Unindent();
         }
 
@@ -2414,7 +2432,8 @@ void DrawInformationMenuNew(void) {
 
         ImGui::Separator();
 
-        const char* info2 = "How to use:\n"
+        const char* info2 =
+            "How to use:\n"
             "\tPress the INSERT key to toggle the menu\n"
             "\tPress the LCTRL key to change targets\n"
             "\tHold the LSHIFT key to enable aimbot (ensure that in game zoom is unbound)\n";
