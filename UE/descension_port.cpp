@@ -582,7 +582,7 @@ static struct AimbotSettings {
 
     bool enabled = true;  // enabling really just enables aimassist, this isnt really an aimbot
     bool use_custom_ping = false;
-    bool auto_aim = false;        // this enables the aimbot
+    bool auto_aim = false;         // this enables the aimbot
     bool target_everyone = false;  // if we want to do prediction on every single player
 
     float ping_in_ms = 0;  //-90
@@ -599,7 +599,7 @@ static struct AimbotSettings {
     float aimbot_horizontal_fov_angle_cos_sqr = 0;  // 0.75;
 
     bool friendly_fire = false;
-    bool need_line_of_sight = true;
+    bool need_line_of_sight = false;
 
     int aimbot_poll_frequency = 60;
 
@@ -619,6 +619,9 @@ static struct AimbotSettings {
     float aimbot_vertical_fov_angle_sin_sqr = 0.25;
 
     bool use_acceleration = true;
+    float acceleration_cap_x = 2000;
+    float acceleration_cap_y = 2000;
+    float acceleration_cap_z = 2000;
 
 } aimbot_settings;
 }  // namespace aimbot
@@ -750,6 +753,12 @@ bool WeaponObject::PredictAimAtTarget(WorldObject* target_object, Vector* output
 
         if (player_found) {
             target_acceleration = (target_velocity - velocity_previous) / (aimbot::delta_time / 1000.0);
+
+            target_acceleration.X = abs(target_acceleration.X) > aimbot::aimbot_settings.acceleration_cap_x ? copysign(aimbot::aimbot_settings.acceleration_cap_x, target_acceleration.X) : target_acceleration.X;
+            target_acceleration.Y = abs(target_acceleration.Y) > aimbot::aimbot_settings.acceleration_cap_y ? copysign(aimbot::aimbot_settings.acceleration_cap_y, target_acceleration.Y) : target_acceleration.Y;
+            target_acceleration.Z = abs(target_acceleration.Z) > aimbot::aimbot_settings.acceleration_cap_z ? copysign(aimbot::aimbot_settings.acceleration_cap_z, target_acceleration.Z) : target_acceleration.Z;
+
+            //cout << target_acceleration.X << ", " << target_acceleration.Y << ", " << target_acceleration.Z << endl;
         }
     }
 
@@ -847,8 +856,7 @@ bool IsInHorizontalFieldOfView(FVector enemy_location, double horizontal_fov) {
 }  // namespace game_functions
 
 namespace other {
-static struct OtherSettings {
-} other_settings;
+static struct OtherSettings { bool instant_respawn = false; } other_settings;
 
 void SendLeftMouseClick(void);
 
@@ -866,7 +874,7 @@ void SendLeftMouseClick(void) {
 }
 
 void Tick(void) {
-    if (!game_data::my_player.is_valid_) {
+    if (other_settings.instant_respawn && !game_data::my_player.is_valid_) {
         game_data::local_player_controller->RequestRespawn();
         game_data::local_player_controller->Respawn();
         game_data::local_player_controller->ServerRequestRespawn();
@@ -884,7 +892,7 @@ static struct ESPSettings {
     int player_height = 100;
     int player_width = 0;
     float width_to_height_ratio = 0.5;
-    bool show_lines = false;
+    bool show_lines = true;
     bool show_names = false;
 
 } esp_settings;
@@ -1737,6 +1745,13 @@ void DrawAimAssistMenu(void) {
             }
 
             ImGui::Checkbox("Factor target acceleration", &aimbot::aimbot_settings.use_acceleration);
+            if (aimbot::aimbot_settings.use_acceleration) {
+                ImGui::Indent();
+                ImGui::SliderFloat("Acceleration cap (X)", &aimbot::aimbot_settings.acceleration_cap_x, 1, 1E4);
+                ImGui::SliderFloat("Acceleration cap (Y)", &aimbot::aimbot_settings.acceleration_cap_y, 1, 1E4);
+                ImGui::SliderFloat("Acceleration cap (Z)", &aimbot::aimbot_settings.acceleration_cap_z, 1, 1E4);
+                ImGui::Unindent();
+            }
 
             // ImGui::Checkbox("Use trigger bot (Explosives only)", &aimbot::aimbot_settings.use_triggerbot);
 
@@ -2289,6 +2304,13 @@ void DrawOtherMenu(void) {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::PushItemWidth(item_width);
+
+        if (ImGui::CollapsingHeader("Other settings")) {
+            ImGui::Indent();
+            ImGui::Checkbox("Instant respawn", &other::other_settings.instant_respawn);
+            ImGui::Unindent();
+        }
+
         if (ImGui::CollapsingHeader("Crosshair settings")) {
             ImGui::Indent();
 
@@ -2362,6 +2384,33 @@ void DrawOtherMenu(void) {
 void DrawSkinChangerMenu(void) {}
 
 void DrawTrainingMenu(void) {}
+
+void DrawInformationMenuNew(void) {
+    static ImGuiTableFlags flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Resizable | (ImGuiTableFlags_ContextMenuInBody & 0) | (ImGuiTableFlags_NoBordersInBody & 0) | ImGuiTableFlags_BordersOuter;
+    if (ImGui::BeginTable("descensiontable", 1, flags, ImVec2(0, ImGui::GetContentRegionAvail().y))) {
+        ImGui::TableSetupColumn("descension ported to Tribes:Ascend", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::PushItemWidth(item_width);
+        ImGui::Indent();
+        const char* info0 =
+            "descension ported to Tribes:Ascend v1.0 (Public)\n"
+            "Released: 22/07/2022\n";
+        //"Game version: -";
+
+        const char* info1 =
+            "https://github.com/MuhanjalaRE\n"
+            "https://twitter.com/Muhanjala\n"
+            "https://dll.rip";
+        ImGui::Text(info0);
+        ImGui::Separator();
+        ImGui::Text(info1);
+
+        ImGui::Unindent();
+        ImGui::EndTable();
+    }
+}
 
 }  // namespace imgui_menu
 
@@ -2740,7 +2789,7 @@ void DrawImGuiInUE(void) {
 
         static ImVec2 padding = ImGui::GetStyle().FramePadding;
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(padding.x, 8));
-        ImGui::Begin("descension v0.5 | Ported to Tribes:Ascend", NULL, ImGuiWindowFlags_AlwaysAutoResize & 0);
+        ImGui::Begin("descension ported to Tribes:Ascend v1.0", NULL, ImGuiWindowFlags_AlwaysAutoResize & 0);
         ImGui::PopStyleVar();
 
         ImVec2 window_position = ImGui::GetWindowPos();
@@ -2832,7 +2881,7 @@ void DrawImGuiInUE(void) {
                 imgui_menu::DrawTrainingMenu();
                 break;
             case imgui_menu::LeftMenuButtons::kInformation:
-                imgui_menu::DrawTrainingMenu();
+                imgui_menu::DrawInformationMenuNew();
                 break;
         }
 
