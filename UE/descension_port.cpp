@@ -152,7 +152,7 @@ static struct ESPVisualSettings {
     struct NameSettings {
         int name_height_offset = 30;
         int scale = 1;
-        ImColor enemy_name_colour = {0, 255, 255, 1 * 255};
+        ImColor enemy_name_colour = {255, 255, 0, 1 * 255};
         ImColor friendly_name_colour = {0, 255, 0, 1 * 255};
     } name_settings;
 
@@ -599,9 +599,9 @@ static struct AimbotSettings {
     int epsilon = 0.05;
 
     bool stay_locked_to_target = true;
-    bool auto_lock_to_new_target = true;
+    bool auto_lock_to_new_target = false;
 
-    float aimbot_horizontal_fov_angle = 90;         // 30;
+    float aimbot_horizontal_fov_angle = 89;         // 30;
     float aimbot_horizontal_fov_angle_cos = 0;      // 0.86602540378;
     float aimbot_horizontal_fov_angle_cos_sqr = 0;  // 0.75;
 
@@ -629,6 +629,7 @@ static struct AimbotSettings {
     float acceleration_cap_x = 2000;
     float acceleration_cap_y = 2000;
     float acceleration_cap_z = 2000;
+    bool aimbot_target_center_of_body = true;
 
 } aimbot_settings;
 }  // namespace aimbot
@@ -864,7 +865,7 @@ bool IsInHorizontalFieldOfView(FVector enemy_location, double horizontal_fov) {
 }  // namespace game_functions
 
 namespace other {
-static struct OtherSettings { bool instant_respawn = false; } other_settings;
+static struct OtherSettings { bool instant_respawn = true; } other_settings;
 
 void SendLeftMouseClick(void);
 
@@ -1209,7 +1210,8 @@ void Tick(void) {
                 }
 
                 if (aimbot_settings.auto_aim || aimbot_enabled) {
-                    prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight / 1;  // Don't divide by 2?
+                    if (aimbot_settings.aimbot_target_center_of_body)
+                        prediction.Z -= target_player.character_->CylinderComponent->CollisionHeight / 1;  // Don't divide by 2?
                     FRotator aim_rotator = math::VectorToRotator(prediction - game_data::my_player.location_);
                     FRotator& aim_rotator_reference = aim_rotator;
                     game_data::local_player_controller->SetRotation(aim_rotator_reference);
@@ -1783,7 +1785,8 @@ void DrawAimAssistMenu(void) {
             if (!aimbot::aimbot_settings.target_everyone) {
                 ImGui::Checkbox("Stay locked on to target", &aimbot::aimbot_settings.stay_locked_to_target);
                 ImGui::Checkbox("Auto lock to new target", &aimbot::aimbot_settings.auto_lock_to_new_target);
-                ImGui::Checkbox("Auto aim", &aimbot::aimbot_settings.auto_aim);
+                ImGui::Checkbox("Aimbot targets center of body", &aimbot::aimbot_settings.aimbot_target_center_of_body);
+                // ImGui::Checkbox("Auto aim", &aimbot::aimbot_settings.auto_aim);
             }
             ImGui::Unindent();
         }
@@ -2159,13 +2162,7 @@ void DrawESPMenu(void) {
                 esp::get_esp_data_timer.SetFrequency(esp::esp_settings.poll_frequency);
             }
             ImGui::Checkbox("Show friendlies", &esp::esp_settings.show_friendlies);
-            ImGui::Checkbox("Show player names", &esp::esp_settings.show_names);
-            if (esp::esp_settings.show_names) {
-                ImGui::Indent();
-                ImGui::ColorEdit4("Friendly name colour##line", &visuals::esp_visual_settings.name_settings.friendly_name_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-                ImGui::ColorEdit4("Enemy name colour##line", &visuals::esp_visual_settings.name_settings.enemy_name_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
-                ImGui::Unindent();
-            }
+
             ImGui::Unindent();
         }
 
@@ -2185,9 +2182,15 @@ void DrawESPMenu(void) {
             ImGui::Unindent();
         }
 
-        if (ImGui::CollapsingHeader("Other settings")) {
+        if (ImGui::CollapsingHeader("Player name settings")) {
             ImGui::Indent();
-
+            ImGui::Checkbox("Show player names", &esp::esp_settings.show_names);
+            if (esp::esp_settings.show_names) {
+                ImGui::Indent();
+                ImGui::ColorEdit4("Friendly name colour##name", &visuals::esp_visual_settings.name_settings.friendly_name_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+                ImGui::ColorEdit4("Enemy name colour##name", &visuals::esp_visual_settings.name_settings.enemy_name_colour.Value.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_None | ImGuiColorEditFlags_AlphaBar);
+                ImGui::Unindent();
+            }
             ImGui::Unindent();
         }
 

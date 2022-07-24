@@ -151,7 +151,7 @@ VMTHook* present_vmthook;
 JumpHook* end_scene_get_device_jumphook;
 
 extern HANDLE game_dx_mutex = CreateMutex(NULL, false, NULL);
-bool imgui_show_menu = true;
+bool imgui_show_menu = false;
 bool imgui_is_ready = false;
 
 // bool resolution_init = false;
