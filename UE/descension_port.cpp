@@ -7,9 +7,11 @@
 #include "imgui_impl_dx9.h"
 #include "imgui_impl_win32.h"
 
+/*
 #include "Other/Files/Files.h"
 #include "Other/JSON/json.hpp"
 #include "Other/Keys/Keys.h"
+*/
 
 #include <chrono>
 #include <fstream>
@@ -30,9 +32,9 @@
 
 #include "detours.h"
 
-using json = nlohmann::json;
+//using json = nlohmann::json;
 using namespace std;
-using namespace UE_Utilities;
+//using namespace UE_Utilities;
 
 typedef FVector Vector;
 typedef FRotator Rotator;
@@ -1318,6 +1320,7 @@ void Tick(void) {
 
 }  // namespace aimbot
 
+/*
 namespace routes {
 struct RouteSettings {
     bool enabled = false;
@@ -1483,6 +1486,7 @@ void PreviousRouteTrail(void) {
 }
 
 }  // namespace routes
+*/
 
 namespace radar {
 static struct RadarSettings {
@@ -1643,7 +1647,7 @@ bool SaveConfig(const char* filename) {
         WriteDataToFile(&visuals::aimbot_visual_settings, sizeof(visuals::aimbot_visual_settings), file);
 
         // Route settings
-        WriteDataToFile(&routes::route_settings, sizeof(routes::route_settings), file);
+        //WriteDataToFile(&routes::route_settings, sizeof(routes::route_settings), file);
         WriteDataToFile(&visuals::route_visual_settings, sizeof(visuals::route_visual_settings), file);
 
         // ESP settings
@@ -1684,7 +1688,7 @@ bool LoadConfig(const char* filename) {
         ReadDataFromFile(&visuals::aimbot_visual_settings, sizeof(visuals::aimbot_visual_settings), file);
 
         // Route settings
-        ReadDataFromFile(&routes::route_settings, sizeof(routes::route_settings), file);
+        //ReadDataFromFile(&routes::route_settings, sizeof(routes::route_settings), file);
         ReadDataFromFile(&visuals::route_visual_settings, sizeof(visuals::route_visual_settings), file);
 
         // ESP settings
@@ -1702,7 +1706,7 @@ bool LoadConfig(const char* filename) {
         ReadDataFromFile(&visuals::crosshair_settings, sizeof(visuals::crosshair_settings), file);
 
         aimbot::aimbot_poll_timer.SetFrequency(aimbot::aimbot_settings.aimbot_poll_frequency);
-        routes::route_draw_poll_timer.SetFrequency(routes::route_settings.route_poll_frequency);
+        //routes::route_draw_poll_timer.SetFrequency(routes::route_settings.route_poll_frequency);
         radar::get_radar_data_timer.SetFrequency(radar::radar_settings.radar_poll_frequency);
         esp::get_esp_data_timer.SetFrequency(esp::esp_settings.poll_frequency);
         esp::esp_settings.show_names = false;
