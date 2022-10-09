@@ -32,9 +32,9 @@
 
 #include "detours.h"
 
-//using json = nlohmann::json;
+// using json = nlohmann::json;
 using namespace std;
-//using namespace UE_Utilities;
+// using namespace UE_Utilities;
 
 typedef FVector Vector;
 typedef FRotator Rotator;
@@ -165,7 +165,7 @@ static struct CrosshairSettings {
     MarkerStyle marker_style = MarkerStyle::kDot;
     int marker_size = 3;
     int marker_thickness = 1;
-    ImColor marker_colour = {255, 0, 255, 255};
+    ImColor marker_colour = {0, 255, 0, 255};
     int marker_size_width = 5;
     int marker_size_height = 5;
 } crosshair_settings;
@@ -1647,7 +1647,7 @@ bool SaveConfig(const char* filename) {
         WriteDataToFile(&visuals::aimbot_visual_settings, sizeof(visuals::aimbot_visual_settings), file);
 
         // Route settings
-        //WriteDataToFile(&routes::route_settings, sizeof(routes::route_settings), file);
+        // WriteDataToFile(&routes::route_settings, sizeof(routes::route_settings), file);
         WriteDataToFile(&visuals::route_visual_settings, sizeof(visuals::route_visual_settings), file);
 
         // ESP settings
@@ -1688,7 +1688,7 @@ bool LoadConfig(const char* filename) {
         ReadDataFromFile(&visuals::aimbot_visual_settings, sizeof(visuals::aimbot_visual_settings), file);
 
         // Route settings
-        //ReadDataFromFile(&routes::route_settings, sizeof(routes::route_settings), file);
+        // ReadDataFromFile(&routes::route_settings, sizeof(routes::route_settings), file);
         ReadDataFromFile(&visuals::route_visual_settings, sizeof(visuals::route_visual_settings), file);
 
         // ESP settings
@@ -1706,7 +1706,7 @@ bool LoadConfig(const char* filename) {
         ReadDataFromFile(&visuals::crosshair_settings, sizeof(visuals::crosshair_settings), file);
 
         aimbot::aimbot_poll_timer.SetFrequency(aimbot::aimbot_settings.aimbot_poll_frequency);
-        //routes::route_draw_poll_timer.SetFrequency(routes::route_settings.route_poll_frequency);
+        // routes::route_draw_poll_timer.SetFrequency(routes::route_settings.route_poll_frequency);
         radar::get_radar_data_timer.SetFrequency(radar::radar_settings.radar_poll_frequency);
         esp::get_esp_data_timer.SetFrequency(esp::esp_settings.poll_frequency);
         esp::esp_settings.show_names = false;
@@ -1774,7 +1774,7 @@ void DrawAimAssistMenu(void) {
             ImGui::Checkbox("Use custom ping value", &aimbot::aimbot_settings.use_custom_ping);
 
             if (aimbot::aimbot_settings.use_custom_ping) {
-                ImGui::SliderFloat("Custom projectile ping", &aimbot::aimbot_settings.ping_in_ms, -300, 300);
+                ImGui::SliderFloat("Custom projectile ping", &aimbot::aimbot_settings.ping_in_ms, -400, 400);
                 ImGui::PopItemWidth();
             }
 
@@ -2459,28 +2459,39 @@ void DrawInformationMenuNew(void) {
 namespace ue {
 #define PROCESSEVENT_HOOK_FUNCTION(x) void __fastcall x(UObject* uo, void* unused, UFunction* uf, void* p, void* r)
 
+PROCESSEVENT_HOOK_FUNCTION(Tick) {
+    AActor_eventTick_Parms* param = (AActor_eventTick_Parms*)p;
+    param->DeltaTime = 10000;
+}
+
+PROCESSEVENT_HOOK_FUNCTION(ClientFinishedReload) {
+    ATrInventoryManager* atrinvman = (ATrInventoryManager*)game_data::local_player_character->InvManager;
+    ATrDevice* device = (ATrDevice*)uo;
+}
+
 PROCESSEVENT_HOOK_FUNCTION(UEHookMain) {
     DWORD dwWaitResult = WaitForSingleObject(dx9::game_dx_mutex, INFINITE);
     if (ue::frame_is_ready) {
         ue::frame_is_ready = false;
+
         ATrHUD_eventPostRenderFor_Parms* param = (ATrHUD_eventPostRenderFor_Parms*)p;
         game_data::local_player_controller = (ATrPlayerController*)param->PC;
         game_data::local_player_character = (Character*)game_data::local_player_controller->Pawn;
 
-        /*
-        math::PrintRotator(game_data::local_player_controller->Rotation, "local_player_controller rotation");
         if (game_data::local_player_character) {
-                        math::PrintRotator(game_data::local_player_character->Rotation, "local_player_character rotation");
-        }
-        */
+            ATrDevice* weapon = (ATrDevice*)game_data::local_player_character->Weapon;
+            if (weapon) {
+                for (int i = 0; i < weapon->Timers.Count; i++) {
+                    if (strcmp(weapon->Timers.Data[i].FuncName.GetName(), "RefireCheckTimer") == 0)
+                        continue;
+                    weapon->Timers.Data[i].Count = 100000;
+                    weapon->Timers.Data[i].bPaused = false;
+                    weapon->Timers.Data[i].Rate = 10000;
+                    weapon->Timers.Data[i].TimerTimeDilation = 1;
+                }
 
-        /*
-        LOG2("local_player_controller->myHUD", (DWORD)game_data::local_player_controller->myHUD);
-        LOG2("local_player_controller->myHUD->Canvas", (DWORD)game_data::local_player_controller->myHUD->Canvas);
-        if (validate::IsValid(game_data::local_player_character)) {
-                        LOG2("local_player_character->GetTrHud()", (DWORD)game_data::local_player_character->GetTrHud());
+            }
         }
-        */
 
         // keyManager.checkKeyStates(false);
         game_data::GetGameData();
@@ -2519,7 +2530,10 @@ void __fastcall ProcessEventHook(UObject* object, void* unused, UFunction* funct
             (*hook)(object, NULL, function, p, r);
         }
     }
+
     original_processevent(object, NULL, function, p, r);
+
+    // cout << function->GetFullName() << endl;
 }
 
 bool AddHook(UFunction* function, _ProcessEvent hook) {
@@ -2538,6 +2552,21 @@ void HookUnrealEngine(void) {
     // Hook32::JumpHook processevent_hook(0x00456F90, (DWORD)hooks::ProcessEventHook);
     UFunction* ufunction = (UFunction*)UObject::FindObject<UFunction>((char*)ue::ufunction_to_hook);
     hooks::AddHook(ufunction, &UEHookMain);
+
+    /*
+    hooks::AddHook((UFunction*)UObject::FindObject<UFunction>((char*)"Function Engine.Actor.Tick"), &Tick);
+    hooks::AddHook((UFunction*)UObject::FindObject<UFunction>((char*)"Function Engine.PlayerController.PlayerTick"), &Tick);
+    hooks::AddHook((UFunction*)UObject::FindObject<UFunction>((char*)"Function Engine.PlayerController.PlayerMove"), &Tick);
+
+    hooks::AddHook((UFunction*)UObject::FindObject<UFunction>((char*)"Function TribesGame.TrPawn.Tick"), &Tick);
+
+    hooks::AddHook((UFunction*)UObject::FindObject<UFunction>((char*)"Function TribesGame.TrPlayerController.PlayerTick"), &Tick);
+
+    hooks::AddHook((UFunction*)UObject::FindObject<UFunction>((char*)"Function TribesGame.TrPlayerController.ServerPlayerTick"), &Tick);
+
+    */
+
+    // hooks::AddHook((UFunction*)UObject::FindObject<UFunction>((char*)"Function TribesGame.TrDevice.ClientFinishedReload"), &ClientFinishedReload);
 
     hooks::original_processevent = (hooks::_ProcessEvent)g_dwProcessEvent;
 
